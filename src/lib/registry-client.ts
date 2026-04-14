@@ -1,13 +1,13 @@
+import type { Octokit } from '@octokit/rest';
 import type { ZodType } from 'zod';
 
-import { fetchWithRetry, type RetryOptions } from './fetch-retry';
+import { callWithRetry, type RetryOptions } from './fetch-retry';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
 import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 import { type Registry, RegistrySchema } from './schemas/registry';
 
 const DEFAULT_OWNER = 'EmergentSoftware';
 const DEFAULT_REPO = 'agentic-toolkit-registry';
-const GITHUB_API = 'https://api.github.com';
 
 /** A pointer to a specific asset version in the registry. */
 export interface AssetManifestRef {
@@ -24,157 +24,149 @@ export interface BundleManifestRef {
   version?: string;
 }
 
-/** Common options accepted by every registry client call. */
+/**
+ * Common options accepted by every registry client call. An authenticated
+ * Octokit instance is required — the CLI can no longer talk to the registry
+ * without a signed-in, org-verified session.
+ */
 export interface RegistryClientOptions {
+  octokit: Octokit;
   owner?: string;
   ref?: string;
   repo?: string;
   retry?: RetryOptions;
   signal?: AbortSignal;
-  token?: string;
-}
-
-interface GitHubContentPayload {
-  content?: string;
-  encoding?: string;
 }
 
 /** Fetch and validate a specific asset's `manifest.json`. */
 export async function fetchAssetManifest(
   ref: AssetManifestRef,
-  options: RegistryClientOptions = {},
+  options: RegistryClientOptions,
 ): Promise<Manifest> {
   const path = buildAssetManifestPath(ref);
-  const url = buildContentsUrl(options, path);
-  return await fetchAndParse<Manifest>(url, ManifestSchema, options);
+  return await fetchAndParse<Manifest>(path, ManifestSchema, options);
+}
+
+/**
+ * Fetch an asset's `README.md` as raw markdown. Returns null when the README
+ * is absent (HTTP 404) so callers can degrade gracefully.
+ */
+export async function fetchAssetReadme(
+  ref: AssetManifestRef,
+  options: RegistryClientOptions,
+): Promise<null | string> {
+  const manifestPath = buildAssetManifestPath(ref);
+  const readmePath = manifestPath.replace(/manifest\.json$/, 'README.md');
+  try {
+    return await fetchContent(readmePath, options);
+  } catch (error) {
+    if (error instanceof RegistryNotFoundError) return null;
+    throw error;
+  }
 }
 
 /** Fetch and validate a bundle's `bundle.json`. */
 export async function fetchBundleManifest(
   ref: BundleManifestRef,
-  options: RegistryClientOptions = {},
+  options: RegistryClientOptions,
 ): Promise<Bundle> {
-  const path = `bundles/${encodePathSegment(ref.name)}/bundle.json`;
-  const url = buildContentsUrl(options, path);
-  return await fetchAndParse<Bundle>(url, BundleSchema, options);
+  const path = `bundles/${ref.name}/bundle.json`;
+  return await fetchAndParse<Bundle>(path, BundleSchema, options);
 }
 
 /** Fetch and validate the top-level `registry.json` from the GitHub registry repo. */
-export async function fetchRegistry(options: RegistryClientOptions = {}): Promise<Registry> {
-  const url = buildContentsUrl(options, 'registry.json');
-  return await fetchAndParse<Registry>(url, RegistrySchema, options);
+export async function fetchRegistry(options: RegistryClientOptions): Promise<Registry> {
+  return await fetchAndParse<Registry>('registry.json', RegistrySchema, options);
 }
 
 function buildAssetManifestPath(ref: AssetManifestRef): string {
   const typeDir = `${ref.type}s`;
   const parts = ['assets', typeDir];
-  if (ref.org) parts.push(encodePathSegment(ref.org));
-  parts.push(encodePathSegment(ref.name), encodePathSegment(ref.version), 'manifest.json');
+  if (ref.org) parts.push(ref.org);
+  parts.push(ref.name, ref.version, 'manifest.json');
   return parts.join('/');
 }
 
-function buildContentsUrl(options: RegistryClientOptions, path: string): string {
+function buildResourceLabel(path: string, options: RegistryClientOptions): string {
   const owner = options.owner ?? DEFAULT_OWNER;
   const repo = options.repo ?? DEFAULT_REPO;
-  const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${path}`;
-  return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
-}
-
-function buildHeaders(token: string | undefined): Headers {
-  const headers = new Headers({
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  });
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  return headers;
-}
-
-function decodeBase64Content(payload: GitHubContentPayload): string {
-  if (!payload.content || payload.encoding !== 'base64') {
-    throw new Error('GitHub Contents payload missing base64 content');
-  }
-  const sanitized = payload.content.replace(/\s+/g, '');
-  const binary = atob(sanitized);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
-
-function encodePathSegment(segment: string): string {
-  return encodeURIComponent(segment).replace(/%40/g, '@');
+  const refSuffix = options.ref ? `@${options.ref}` : '';
+  return `${owner}/${repo}${refSuffix}:${path}`;
 }
 
 async function fetchAndParse<T>(
-  url: string,
+  path: string,
   schema: ZodType<T>,
   options: RegistryClientOptions,
 ): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetchWithRetry(
-      url,
-      { headers: buildHeaders(options.token), signal: options.signal },
-      options.retry,
-    );
-  } catch (cause) {
-    if (options.signal?.aborted) throw cause;
-    throw new RegistryFetchError(`Network error while fetching ${url}`, { cause, url });
-  }
-
-  if (response.status === 404) {
-    throw new RegistryNotFoundError(`Registry resource not found: ${url}`, { url });
-  }
-
-  if (!response.ok) {
-    throw new RegistryFetchError(`Registry request failed with HTTP ${response.status}`, {
-      status: response.status,
-      url,
-    });
-  }
-
-  const rawBody = await response.text();
-
-  let envelope: GitHubContentPayload;
-  try {
-    envelope = JSON.parse(rawBody) as GitHubContentPayload;
-  } catch (cause) {
-    throw new RegistryParseError(`Registry response is not valid JSON: ${url}`, {
-      cause,
-      payload: rawBody,
-      url,
-    });
-  }
-
-  let decoded: string;
-  try {
-    decoded = decodeBase64Content(envelope);
-  } catch (cause) {
-    throw new RegistryParseError(`Registry response is missing decodable base64 content: ${url}`, {
-      cause,
-      payload: rawBody,
-      url,
-    });
-  }
+  const decoded = await fetchContent(path, options);
+  const label = buildResourceLabel(path, options);
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(decoded);
   } catch (cause) {
-    throw new RegistryParseError(`Registry content is not valid JSON: ${url}`, {
+    throw new RegistryParseError(`Registry content is not valid JSON: ${label}`, {
       cause,
       payload: decoded,
-      url,
+      url: label,
     });
   }
 
   const result = schema.safeParse(parsed);
   if (!result.success) {
-    throw new RegistryParseError(`Registry content failed schema validation: ${url}`, {
+    throw new RegistryParseError(`Registry content failed schema validation: ${label}`, {
       payload: decoded,
-      url,
+      url: label,
       zodError: result.error,
     });
   }
 
   return result.data;
+}
+
+/**
+ * Fetch the raw UTF-8 contents of a file from the registry repo via Octokit.
+ *
+ * Uses `mediaType: { format: 'raw' }` so GitHub returns the decoded file body
+ * directly rather than a base64-encoded envelope.
+ */
+async function fetchContent(path: string, options: RegistryClientOptions): Promise<string> {
+  const owner = options.owner ?? DEFAULT_OWNER;
+  const repo = options.repo ?? DEFAULT_REPO;
+  const label = buildResourceLabel(path, options);
+
+  let raw: unknown;
+  try {
+    const response = await callWithRetry(
+      () =>
+        options.octokit.rest.repos.getContent({
+          mediaType: { format: 'raw' },
+          owner,
+          path,
+          repo,
+          ...(options.ref ? { ref: options.ref } : {}),
+          request: options.signal ? { signal: options.signal } : undefined,
+        }),
+      options.retry,
+      options.signal,
+    );
+    raw = response.data;
+  } catch (cause: unknown) {
+    if (options.signal?.aborted) throw cause;
+    const status = (cause as { status?: number }).status;
+    if (status === 404) {
+      throw new RegistryNotFoundError(`Registry resource not found: ${label}`, { url: label });
+    }
+    throw new RegistryFetchError(
+      `Registry request failed${status !== undefined ? ` with HTTP ${status}` : ''}: ${label}`,
+      { cause, status, url: label },
+    );
+  }
+
+  if (typeof raw === 'string') return raw;
+  throw new RegistryParseError(`Registry content was not a raw string: ${label}`, {
+    payload: String(raw),
+    url: label,
+  });
 }

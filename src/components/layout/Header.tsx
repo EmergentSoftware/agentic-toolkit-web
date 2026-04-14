@@ -1,8 +1,10 @@
 import { Package } from 'lucide-react';
-import { NavLink } from 'react-router';
+import { NavLink, useNavigate } from 'react-router';
 
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { Button } from '@/components/ui/button';
+import { useSession } from '@/hooks/useSession';
+import { consumePendingReturnPath } from '@/lib/session';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -13,10 +15,22 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { end: true, label: 'Browse', to: '/' },
+  { label: 'Bundles', to: '/bundles' },
   { label: 'Contribute', to: '/contribute' },
 ];
 
 export function Header() {
+  const { signIn, signOut, status, user } = useSession();
+  const navigate = useNavigate();
+
+  const handleSignOut = () => {
+    signOut();
+    navigate('/', { replace: true });
+  };
+
+  const showSignOut = status === 'member' || status === 'non-member' || status === 'verifying';
+  const showSignIn = status === 'signed-out';
+
   return (
     <header
       className='sticky top-0 z-40 flex h-14 w-full items-center border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80'
@@ -48,9 +62,38 @@ export function Header() {
 
         <div className='flex items-center gap-2'>
           <ThemeToggle />
-          <Button aria-label='Sign in' data-testid='user-affordance' disabled size='sm' variant='outline'>
-            Sign in
-          </Button>
+          {showSignIn ? (
+            <Button
+              aria-label='Sign in'
+              data-testid='user-affordance'
+              onClick={() => signIn(consumePendingReturnPath())}
+              size='sm'
+              variant='outline'
+            >
+              Sign in
+            </Button>
+          ) : null}
+          {showSignOut ? (
+            <>
+              {user ? (
+                <span
+                  className='hidden text-sm text-muted-foreground sm:inline'
+                  data-testid='user-login'
+                >
+                  {user.login}
+                </span>
+              ) : null}
+              <Button
+                aria-label='Sign out'
+                data-testid='user-affordance'
+                onClick={handleSignOut}
+                size='sm'
+                variant='outline'
+              >
+                Sign out
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
     </header>

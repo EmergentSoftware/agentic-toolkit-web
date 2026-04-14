@@ -49,3 +49,19 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Install auth-function dependencies
+        working-directory: auth-function
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint auth-function
+        working-directory: auth-function
+        run: pnpm lint
+
+      - name: Type check auth-function
+        working-directory: auth-function
+        run: pnpm typecheck
+
+      - name: Test auth-function
+        working-directory: auth-function
+        run: pnpm test

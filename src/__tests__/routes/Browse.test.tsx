@@ -13,7 +13,11 @@ import { BrowseRoute } from '@/routes/Browse';
 import { loadFixtureRegistry } from '../fixtures';
 
 const useRegistryMock = vi.hoisted(() => vi.fn());
+const useDownloadAssetMock = vi.hoisted(() =>
+  vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
+);
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
+vi.mock('@/hooks/useDownloadAsset', () => ({ useDownloadAsset: useDownloadAssetMock }));
 
 type QueryShape = Partial<UseQueryResult<Registry, Error>>;
 
@@ -36,7 +40,10 @@ function renderBrowse() {
         <MemoryRouter initialEntries={['/']}>
           <Routes>
             <Route element={children} path='/' />
-            <Route element={<div data-testid='asset-route'>ASSET ROUTE</div>} path='assets/:assetId' />
+            <Route
+              element={<div data-testid='asset-route'>ASSET ROUTE</div>}
+              path='assets/:type/:name/:version'
+            />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>

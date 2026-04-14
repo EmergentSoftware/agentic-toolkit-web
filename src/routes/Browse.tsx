@@ -14,6 +14,7 @@ import type { AssetType } from '@/lib/schemas/manifest';
 import type { RegistryAsset } from '@/lib/schemas/registry';
 
 import { EmptyState } from '@/components/EmptyState';
+import { FilterGroup } from '@/components/FilterGroup';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { PageHeader } from '@/components/PageHeader';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useDownloadAsset } from '@/hooks/useDownloadAsset';
 import { useRegistry } from '@/hooks/useRegistry';
 import { rankAssetNames } from '@/lib/search';
 import { cn } from '@/lib/utils';
@@ -41,26 +43,21 @@ const ASSET_TYPES: AssetType[] = ['skill', 'agent', 'rule', 'hook', 'memory-temp
 const ALL_COLUMN_IDS = ['name', 'type', 'description', 'version', 'tags', 'tools', 'org', 'actions'] as const;
 
 interface BrowseCardListProps {
-  onCardClick: (name: string) => void;
+  isDownloading: (ref: { name: string; org?: string; type: AssetType; version: string }) => boolean;
+  onCardClick: (row: BrowseRow) => void;
+  onDownload: (row: BrowseRow) => void;
   rows: BrowseRow[];
 }
 
 interface BrowseTableProps {
-  onRowClick: (name: string) => void;
+  onRowClick: (row: BrowseRow) => void;
   table: ReturnType<typeof useReactTable<BrowseRow>>;
-}
-
-interface FilterGroupProps<T extends string> {
-  emptyLabel?: string;
-  label: string;
-  onToggle: (value: T) => void;
-  options: T[];
-  selected: Set<T>;
 }
 
 export function BrowseRoute() {
   const { data, error, isError, isLoading } = useRegistry();
   const navigate = useNavigate();
+  const { download, isDownloading } = useDownloadAsset();
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<Set<AssetType>>(new Set());
@@ -171,24 +168,26 @@ export function BrowseRoute() {
         header: 'Org scope',
       },
       {
-        cell: ({ row }) => (
-          <Button
-            aria-label={`Download ${row.original.name}`}
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-            size='sm'
-            variant='outline'
-          >
-            Download
-          </Button>
-        ),
+        cell: ({ row }) => {
+          const assetRef = rowToAssetRef(row.original);
+          const loading = isDownloading(assetRef);
+          return (
+            <DownloadRowButton
+              isLoading={loading}
+              name={row.original.name}
+              onClick={(event) => {
+                event.stopPropagation();
+                void download(assetRef);
+              }}
+            />
+          );
+        },
         enableSorting: false,
         header: 'Actions',
         id: 'actions',
       },
     ],
-    [],
+    [download, isDownloading],
   );
 
   const table = useReactTable({
@@ -201,7 +200,8 @@ export function BrowseRoute() {
     state: { columnVisibility, sorting },
   });
 
-  const navigateToAsset = (name: string) => navigate(`/assets/${encodeURIComponent(name)}`);
+  const navigateToAsset = (row: BrowseRow) =>
+    navigate(`/assets/${row.type}/${encodeURIComponent(row.name)}/${row.version}`);
 
   const toggleInSet = <T,>(set: Set<T>, value: T, setSet: (s: Set<T>) => void) => {
     const next = new Set(set);
@@ -341,14 +341,19 @@ export function BrowseRoute() {
       ) : (
         <>
           <BrowseTable onRowClick={navigateToAsset} table={table} />
-          <BrowseCardList onCardClick={navigateToAsset} rows={rows} />
+          <BrowseCardList
+            isDownloading={isDownloading}
+            onCardClick={navigateToAsset}
+            onDownload={(row) => void download(rowToAssetRef(row))}
+            rows={rows}
+          />
         </>
       )}
     </>
   );
 }
 
-function BrowseCardList({ onCardClick, rows }: BrowseCardListProps) {
+function BrowseCardList({ isDownloading, onCardClick, onDownload, rows }: BrowseCardListProps) {
   return (
     <ul
       aria-label='Registry assets (compact)'
@@ -360,11 +365,11 @@ function BrowseCardList({ onCardClick, rows }: BrowseCardListProps) {
           <Card
             className='cursor-pointer'
             data-testid={`browse-card-${row.name}`}
-            onClick={() => onCardClick(row.name)}
+            onClick={() => onCardClick(row)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onCardClick(row.name);
+                onCardClick(row);
               }
             }}
             role='link'
@@ -401,14 +406,14 @@ function BrowseCardList({ onCardClick, rows }: BrowseCardListProps) {
                   ))}
                 </div>
               ) : null}
-              <Button
-                aria-label={`Download ${row.name}`}
-                onClick={(event) => event.stopPropagation()}
-                size='sm'
-                variant='outline'
-              >
-                Download
-              </Button>
+              <DownloadRowButton
+                isLoading={isDownloading(rowToAssetRef(row))}
+                name={row.name}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDownload(row);
+                }}
+              />
             </CardContent>
           </Card>
         </li>
@@ -457,11 +462,11 @@ function BrowseTable({ onRowClick, table }: BrowseTableProps) {
               className='cursor-pointer'
               data-testid={`browse-row-${row.original.name}`}
               key={row.id}
-              onClick={() => onRowClick(row.original.name)}
+              onClick={() => onRowClick(row.original)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  onRowClick(row.original.name);
+                  onRowClick(row.original);
                 }
               }}
               role='link'
@@ -478,40 +483,43 @@ function BrowseTable({ onRowClick, table }: BrowseTableProps) {
   );
 }
 
-function FilterGroup<T extends string>({
-  emptyLabel = 'No options',
-  label,
-  onToggle,
-  options,
-  selected,
-}: FilterGroupProps<T>) {
-  const groupId = `filter-${label.toLowerCase().replace(/\s+/g, '-')}`;
+function DownloadRowButton({
+  isLoading,
+  name,
+  onClick,
+}: {
+  isLoading: boolean;
+  name: string;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
   return (
-    <fieldset aria-labelledby={`${groupId}-legend`} className='rounded-md border border-border p-3'>
-      <legend className='px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground' id={`${groupId}-legend`}>
-        {label}
-      </legend>
-      {options.length === 0 ? (
-        <p className='text-sm text-muted-foreground'>{emptyLabel}</p>
-      ) : (
-        <div className='flex flex-wrap gap-x-4 gap-y-2'>
-          {options.map((option) => {
-            const inputId = `${groupId}-${option}`;
-            return (
-              <label className='flex cursor-pointer items-center gap-2 text-sm' htmlFor={inputId} key={option}>
-                <Checkbox
-                  checked={selected.has(option)}
-                  id={inputId}
-                  onChange={() => onToggle(option)}
-                />
-                {option}
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </fieldset>
+    <Button
+      aria-busy={isLoading || undefined}
+      aria-label={`Download ${name}`}
+      data-testid={`browse-download-${name}`}
+      disabled={isLoading}
+      onClick={onClick}
+      size='sm'
+      variant='outline'
+    >
+      {isLoading ? (
+        <span
+          aria-hidden='true'
+          className='mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent'
+        />
+      ) : null}
+      {isLoading ? 'Downloading…' : 'Download'}
+    </Button>
   );
+}
+
+function rowToAssetRef(row: BrowseRow): { name: string; org?: string; type: AssetType; version: string } {
+  return {
+    name: row.name,
+    org: row.org || undefined,
+    type: row.type,
+    version: row.version,
+  };
 }
 
 function toRow(asset: RegistryAsset): BrowseRow {

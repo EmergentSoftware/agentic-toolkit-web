@@ -5,12 +5,16 @@ import { Route, Routes } from 'react-router';
 
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { RequireAuth } from '@/components/RequireAuth';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 import { queryClient } from '@/lib/query-client';
+import { SessionProvider } from '@/providers/SessionProvider';
 import { AssetDetailRoute } from '@/routes/AssetDetail';
-import { BrowseRoute } from '@/routes/Browse';
+import { AuthCallbackRoute } from '@/routes/AuthCallback';
 import { BundleDetailRoute } from '@/routes/BundleDetail';
+import { BundlesRoute } from '@/routes/Bundles';
 import { ContributeRoute } from '@/routes/Contribute';
+import { IndexRoute } from '@/routes/Index';
 import { NotAuthorizedRoute } from '@/routes/NotAuthorized';
 import { NotFoundRoute } from '@/routes/NotFound';
 import { SignInRoute } from '@/routes/SignIn';
@@ -19,14 +23,15 @@ export function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <Toast.Provider>
-          <ErrorBoundary scope='application'>
-            <Routes>
+        <SessionProvider>
+          <Toast.Provider>
+            <ErrorBoundary scope='application'>
+              <Routes>
               <Route element={<AppLayout />} path='/'>
                 <Route
                   element={
                     <RouteBoundary scope='Browse'>
-                      <BrowseRoute />
+                      <IndexRoute />
                     </RouteBoundary>
                   }
                   index
@@ -41,16 +46,38 @@ export function App() {
                 />
                 <Route
                   element={
-                    <RouteBoundary scope='Asset detail'>
-                      <AssetDetailRoute />
+                    <RouteBoundary scope='Auth callback'>
+                      <AuthCallbackRoute />
                     </RouteBoundary>
                   }
-                  path='assets/:assetId'
+                  path='auth/callback'
+                />
+                <Route
+                  element={
+                    <RouteBoundary scope='Asset detail'>
+                      <RequireAuth>
+                        <AssetDetailRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='assets/:type/:name/:version'
+                />
+                <Route
+                  element={
+                    <RouteBoundary scope='Bundles'>
+                      <RequireAuth>
+                        <BundlesRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='bundles'
                 />
                 <Route
                   element={
                     <RouteBoundary scope='Bundle detail'>
-                      <BundleDetailRoute />
+                      <RequireAuth>
+                        <BundleDetailRoute />
+                      </RequireAuth>
                     </RouteBoundary>
                   }
                   path='bundles/:bundleId'
@@ -58,7 +85,9 @@ export function App() {
                 <Route
                   element={
                     <RouteBoundary scope='Contribute'>
-                      <ContributeRoute />
+                      <RequireAuth>
+                        <ContributeRoute />
+                      </RequireAuth>
                     </RouteBoundary>
                   }
                   path='contribute'
@@ -80,9 +109,10 @@ export function App() {
                   path='*'
                 />
               </Route>
-            </Routes>
-          </ErrorBoundary>
-        </Toast.Provider>
+              </Routes>
+            </ErrorBoundary>
+          </Toast.Provider>
+        </SessionProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

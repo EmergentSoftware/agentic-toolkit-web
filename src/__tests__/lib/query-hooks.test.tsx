@@ -1,34 +1,48 @@
+import type { Octokit } from '@octokit/rest';
 import type { ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useRegistry } from '@/hooks';
+import { useRegistry } from '@/hooks/useRegistry';
 import { queryKeys } from '@/lib/query-keys';
 
 import { loadFixtureRegistry } from '../fixtures';
 
-function encodeContents(obj: unknown): { content: string; encoding: 'base64' } {
-  const json = JSON.stringify(obj);
-  const bytes = new TextEncoder().encode(json);
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return { content: btoa(binary), encoding: 'base64' };
+// Intercept the session so we can feed the hooks a controlled Octokit (or null).
+const sessionValueMock: {
+  octokit: null | Octokit;
+  token: null | string;
+} = { octokit: null, token: null };
+
+vi.mock('@/hooks/useSession', () => ({
+  useSession: () => sessionValueMock,
+}));
+
+type GetContentResult = Awaited<ReturnType<Octokit['rest']['repos']['getContent']>>;
+
+function fakeOctokit(queue: Array<Error | GetContentResult | string>): Octokit {
+  const spy = vi.fn(async () => {
+    const next = queue.shift();
+    if (next === undefined) throw new Error('fakeOctokit: queue exhausted');
+    if (next instanceof Error) throw next;
+    if (typeof next === 'string') return rawResponse(next);
+    return next;
+  });
+  return { rest: { repos: { getContent: spy } } } as unknown as Octokit;
 }
 
-function githubOk(obj: unknown): Response {
-  return new Response(JSON.stringify(encodeContents(obj)), { status: 200 });
+function httpError(status: number): Error & { status: number } {
+  const err = new Error(`HTTP ${status}`) as Error & { status: number };
+  err.status = status;
+  return err;
 }
 
 function makeWrapper() {
   const client = new QueryClient({
     defaultOptions: {
-      queries: {
-        gcTime: 0,
-        retry: false,
-        staleTime: Infinity,
-      },
+      queries: { gcTime: 0, retry: false, staleTime: Infinity },
     },
   });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -37,57 +51,75 @@ function makeWrapper() {
   return { client, Wrapper };
 }
 
+function rawResponse(raw: string): GetContentResult {
+  return { data: raw } as unknown as GetContentResult;
+}
+
 describe('useRegistry (TanStack Query)', () => {
+  beforeEach(() => {
+    sessionValueMock.octokit = null;
+    sessionValueMock.token = null;
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('fetches and caches registry data (no refetch on rerender)', async () => {
+  it('stays disabled when no Octokit is available on the session', async () => {
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useRegistry(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'));
+    expect(result.current.isPending).toBe(true);
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it('fetches and caches registry data via Octokit (no refetch on rerender)', async () => {
     const fixture = loadFixtureRegistry();
-    const fetchMock = vi.fn().mockResolvedValue(githubOk(fixture));
-    vi.stubGlobal('fetch', fetchMock);
+    sessionValueMock.token = 'tok';
+    sessionValueMock.octokit = fakeOctokit([
+      JSON.stringify(fixture),
+      JSON.stringify(fixture),
+    ]);
 
     const { Wrapper } = makeWrapper();
-    const { rerender, result } = renderHook(
-      () => useRegistry({ retry: { baseDelayMs: 1, jitter: false, maxDelayMs: 1, maxRetries: 0 } }),
-      { wrapper: Wrapper },
-    );
+    const { rerender, result } = renderHook(() => useRegistry(), { wrapper: Wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.assets).toHaveLength(fixture.assets.length);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const spy = sessionValueMock.octokit.rest.repos.getContent as unknown as ReturnType<typeof vi.fn>;
+    expect(spy).toHaveBeenCalledTimes(1);
 
     rerender();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('refetches when the query is invalidated', async () => {
     const fixture = loadFixtureRegistry();
-    const fetchMock = vi.fn().mockResolvedValue(githubOk(fixture));
-    vi.stubGlobal('fetch', fetchMock);
+    sessionValueMock.token = 'tok';
+    sessionValueMock.octokit = fakeOctokit([
+      JSON.stringify(fixture),
+      JSON.stringify(fixture),
+    ]);
 
     const { client, Wrapper } = makeWrapper();
-    const { result } = renderHook(
-      () => useRegistry({ retry: { baseDelayMs: 1, jitter: false, maxDelayMs: 1, maxRetries: 0 } }),
-      { wrapper: Wrapper },
-    );
+    const { result } = renderHook(() => useRegistry(), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const spy = sessionValueMock.octokit.rest.repos.getContent as unknown as ReturnType<typeof vi.fn>;
+    expect(spy).toHaveBeenCalledTimes(1);
 
     await client.invalidateQueries({ queryKey: queryKeys.registry() });
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
 
-  it('surfaces errors through useQuery.error', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 404 }));
-    vi.stubGlobal('fetch', fetchMock);
+  it('surfaces 404s through useQuery.error as RegistryNotFoundError', async () => {
+    sessionValueMock.token = 'tok';
+    sessionValueMock.octokit = fakeOctokit([httpError(404)]);
 
     const { Wrapper } = makeWrapper();
-    const { result } = renderHook(
-      () => useRegistry({ retry: { baseDelayMs: 1, jitter: false, maxDelayMs: 1, maxRetries: 0 } }),
-      { wrapper: Wrapper },
-    );
+    const { result } = renderHook(() => useRegistry(), { wrapper: Wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.name).toBe('RegistryNotFoundError');

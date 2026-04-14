@@ -6,18 +6,22 @@ import { describe, expect, it } from 'vitest';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 
+import { makeSessionValue, SessionHarness } from '../utils/session-harness';
+
 function renderLayout(initialPath = '/') {
   return render(
     <ThemeProvider>
-      <Toast.Provider>
-        <MemoryRouter initialEntries={[initialPath]}>
-          <Routes>
-            <Route element={<AppLayout />} path='/'>
-              <Route element={<p>landing-content</p>} index />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </Toast.Provider>
+      <SessionHarness session={makeSessionValue({ status: 'signed-out' })}>
+        <Toast.Provider>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <Routes>
+              <Route element={<AppLayout />} path='/'>
+                <Route element={<p>landing-content</p>} index />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </Toast.Provider>
+      </SessionHarness>
     </ThemeProvider>,
   );
 }
@@ -45,7 +49,7 @@ describe('AppLayout', () => {
     expect(screen.getByText('landing-content')).toBeInTheDocument();
   });
 
-  it('renders the theme toggle and user affordance placeholder', () => {
+  it('renders the theme toggle and user affordance (Sign in when signed out)', () => {
     renderLayout();
 
     expect(screen.getByRole('button', { name: /switch to/i })).toBeInTheDocument();

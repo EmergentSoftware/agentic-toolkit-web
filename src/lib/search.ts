@@ -32,6 +32,25 @@ export function rankAssetNames(assets: RegistryAsset[], query: string): string[]
 }
 
 /**
+ * Rank a list of bundles by relevance to a query, returning ordered names.
+ * When query is empty, returns names in alphabetical order. Matches the
+ * weighting used by {@link rankAssetNames}.
+ */
+export function rankBundleNames(bundles: RegistryBundle[], query: string): string[] {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) {
+    return [...bundles].sort((a, b) => a.name.localeCompare(b.name)).map((b) => b.name);
+  }
+  const terms = trimmed.split(/\s+/).filter(Boolean);
+  const scored = bundles.map((bundle) => ({ bundle, score: scoreBundle(bundle, terms, trimmed) }));
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.bundle.name.localeCompare(b.bundle.name);
+  });
+  return scored.filter((s) => s.score > 0).map((s) => s.bundle.name);
+}
+
+/**
  * Score a registry asset against a pre-split set of query terms and the full lowercased query.
  * Returns 0 when the item has no latest version, matching CLI behavior.
  */

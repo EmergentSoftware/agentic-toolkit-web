@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { rankAssetNames, scoreItem, searchRegistry } from '@/lib/search';
+import { rankAssetNames, rankBundleNames, scoreItem, searchRegistry } from '@/lib/search';
 
 import { loadFixtureRegistry } from '../fixtures';
 
@@ -30,5 +30,24 @@ describe('search', () => {
     const registry = loadFixtureRegistry();
     const results = searchRegistry(registry, { query: 'workflow', tool: 'claude-code' });
     expect(results.every((r) => r.kind === 'asset')).toBe(true);
+  });
+
+  it('rankBundleNames orders by relevance then alphabetically when empty', () => {
+    const registry = loadFixtureRegistry();
+    expect(rankBundleNames(registry.bundles ?? [], '')).toEqual(['feature-workflow', 'quality-bundle']);
+  });
+
+  it('rankBundleNames prefers name match, then description and tag matches', () => {
+    const registry = loadFixtureRegistry();
+    const quality = rankBundleNames(registry.bundles ?? [], 'quality');
+    expect(quality[0]).toBe('quality-bundle');
+
+    const workflow = rankBundleNames(registry.bundles ?? [], 'workflow');
+    expect(workflow[0]).toBe('feature-workflow');
+  });
+
+  it('rankBundleNames drops bundles with zero score', () => {
+    const registry = loadFixtureRegistry();
+    expect(rankBundleNames(registry.bundles ?? [], 'zzz-nothing-matches')).toEqual([]);
   });
 });

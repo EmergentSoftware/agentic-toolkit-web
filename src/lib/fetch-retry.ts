@@ -29,6 +29,41 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 /**
+ * Retry an arbitrary async operation (e.g. an Octokit call) on transient failures.
+ *
+ * Mirrors the `fetchWithRetry` policy: retries on retryable HTTP status codes
+ * (read from the thrown error's `status` field) and on network errors that do
+ * not expose a status. Non-retryable errors (e.g. 401, 403, 404) propagate
+ * immediately without retry. Honors an optional AbortSignal for cancellation.
+ */
+export async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  retryOptions?: RetryOptions,
+  signal?: AbortSignal,
+): Promise<T> {
+  const options: Required<RetryOptions> = { ...DEFAULT_OPTIONS, ...retryOptions };
+
+  for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: unknown) {
+      if (signal?.aborted) throw error;
+
+      const status = (error as { status?: number }).status;
+      const isRetryable = status === undefined || isRetryableStatus(status);
+
+      if (!isRetryable || attempt >= options.maxRetries) throw error;
+
+      const delay = computeDelay(attempt, options);
+      await sleep(delay, signal);
+    }
+  }
+
+  // Unreachable — the loop either returns or throws.
+  throw new Error('callWithRetry: exhausted retries without throwing');
+}
+
+/**
  * Fetch with automatic retry for transient failures.
  *
  * Wraps the standard `fetch` API and retries on:
