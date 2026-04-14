@@ -1,0 +1,115 @@
+{
+  "version": "2026-04-10T12:00:00.000Z",
+  "assets": [
+    {
+      "name": "validate",
+      "org": "agentic-toolkit",
+      "type": "agent",
+      "latest": "1.1.0",
+      "tags": ["quality", "ci"],
+      "versions": {
+        "1.0.0": {
+          "author": "EmergentSoftware",
+          "checksum": "b1c3a0efb10f6f06b6cd9daf8b2e7a9fb2a0a7b0e1b0f6a1d3c3f0a9b7d5e1c0",
+          "description": "Runs lint, typecheck, and test and returns a concise summary.",
+          "files": ["AGENT.md"],
+          "tools": ["claude-code"]
+        },
+        "1.1.0": {
+          "author": "EmergentSoftware",
+          "checksum": "c2d4b1f0c21f7fa7c7de0ebf9c3f8bafc3b1b8c1f2c1f7b2e4d4e1b0c8e6f2d1",
+          "dependencies": [
+            { "name": "dev-commands-rule", "type": "rule", "version": "^1.0.0" }
+          ],
+          "description": "Runs lint, typecheck, and test and returns a concise summary.",
+          "files": ["AGENT.md"],
+          "security": {
+            "permissions": ["filesystem"],
+            "reviewedAt": "2026-03-01",
+            "reviewedBy": "security-team"
+          },
+          "tools": ["claude-code"]
+        }
+      }
+    },
+    {
+      "name": "dev-commands-rule",
+      "type": "rule",
+      "latest": "1.0.0",
+      "tags": ["quality"],
+      "versions": {
+        "1.0.0": {
+          "author": "EmergentSoftware",
+          "checksum": "d3e5c2a1d32f8fb8d8ef1fc0d4e9cbd4e2c9c9d2f3d2f8c3f5e5f2c1d9f7e3d2",
+          "description": "Always use the validate agent for dev commands.",
+          "tools": ["claude-code"]
+        }
+      }
+    },
+    {
+      "name": "clarification-agent",
+      "type": "agent",
+      "latest": "1.0.0",
+      "tags": ["workflow"],
+      "versions": {
+        "1.0.0": {
+          "author": "community",
+          "checksum": "e4f6d3b2e43f9fc9e9ff2fd1e5facbe5f3daead3f4d3f9d4f6f6f3d2eaf8f4e3",
+          "description": "Generates clarifying questions for ambiguous feature requests.",
+          "tools": ["claude-code"]
+        }
+      }
+    },
+    {
+      "name": "feature-skill",
+      "type": "skill",
+      "latest": "0.2.0",
+      "tags": ["workflow"],
+      "versions": {
+        "0.2.0": {
+          "author": "community",
+          "checksum": "f5a7e4c3f54fafcafafa3fe2f6fbdcf6f4ebfbe4f5e4fae5f7f7f4e3fbf9f5f4",
+          "description": "Scaffolds a new feature following conventional commits.",
+          "files": ["SKILL.md"],
+          "tools": ["claude-code"]
+        }
+      }
+    }
+  ],
+  "bundles": [
+    {
+      "name": "feature-workflow",
+      "author": "EmergentSoftware",
+      "description": "Full feature workflow: clarification, scaffolding, and validation.",
+      "assetCount": 3,
+      "assets": [
+        { "name": "clarification-agent", "type": "agent" },
+        { "name": "feature-skill", "type": "skill" },
+        { "name": "validate", "org": "agentic-toolkit", "type": "agent", "version": "1.1.0" }
+      ],
+      "tags": ["workflow"],
+      "version": "1.0.0"
+    },
+    {
+      "name": "quality-bundle",
+      "author": "EmergentSoftware",
+      "description": "Linting, typechecking, and validation primitives.",
+      "assetCount": 2,
+      "assets": [
+        { "name": "dev-commands-rule", "type": "rule" },
+        { "name": "validate", "org": "agentic-toolkit", "type": "agent", "version": "1.1.0" }
+      ],
+      "tags": ["quality"],
+      "version": "0.3.0"
+    }
+  ],
+  "deprecated": [
+    {
+      "name": "old-validate",
+      "type": "agent",
+      "deprecatedAt": "2026-01-15",
+      "reason": "Superseded by @agentic-toolkit/validate",
+      "replacement": "validate"
+    }
+  ]
+}
