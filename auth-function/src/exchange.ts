@@ -75,9 +75,12 @@ export const exchangeHandler: HttpHandler = async (
 
   if (!isOriginAllowed(origin, allowedOrigins)) {
     log.info({
+      allowedOrigins,
+      configuredRaw: process.env.CORS_ALLOWED_ORIGINS ?? null,
       event: 'origin_rejected',
       method: request.method,
       origin: origin ?? null,
+      originBytes: origin ? [...origin].map((c) => c.charCodeAt(0)) : null,
     });
     return errorResponse(
       403,
