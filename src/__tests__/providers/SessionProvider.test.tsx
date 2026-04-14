@@ -11,16 +11,16 @@ import { SessionProvider } from '@/providers/SessionProvider';
 // Control what each new Octokit() instance returns. Update per-test before render.
 const octokitControl: {
   authenticated: () => Promise<unknown>;
-  checkMembership: () => Promise<unknown>;
+  getMembership: () => Promise<unknown>;
 } = {
   authenticated: async () => ({ data: { avatar_url: null, login: 'tester', name: null } }),
-  checkMembership: async () => undefined,
+  getMembership: async () => ({ data: { role: 'member', state: 'active' } }),
 };
 
 vi.mock('@octokit/rest', () => ({
   Octokit: class {
     rest = {
-      orgs: { checkMembershipForUser: () => octokitControl.checkMembership() },
+      orgs: { getMembershipForAuthenticatedUser: () => octokitControl.getMembership() },
       repos: { getContent: async () => ({ data: '' }) },
       users: { getAuthenticated: () => octokitControl.authenticated() },
     };
@@ -54,7 +54,7 @@ describe('SessionProvider', () => {
     octokitControl.authenticated = async () => ({
       data: { avatar_url: null, login: 'tester', name: null },
     });
-    octokitControl.checkMembership = async () => undefined;
+    octokitControl.getMembership = async () => ({ data: { role: 'member', state: 'active' } });
   });
 
   afterEach(() => {
@@ -82,7 +82,7 @@ describe('SessionProvider', () => {
 
   it('transitions to non-member when the membership check 404s', async () => {
     window.sessionStorage.setItem(SESSION_STORAGE_KEYS.token, 'gho_nonmember');
-    octokitControl.checkMembership = async () => {
+    octokitControl.getMembership = async () => {
       const err = new Error('not a member') as Error & { status: number };
       err.status = 404;
       throw err;
@@ -93,13 +93,9 @@ describe('SessionProvider', () => {
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('non-member'));
   });
 
-  it('transitions to non-member when the membership check returns 302 (requester not in org)', async () => {
-    window.sessionStorage.setItem(SESSION_STORAGE_KEYS.token, 'gho_requester');
-    octokitControl.checkMembership = async () => {
-      const err = new Error('redirect') as Error & { status: number };
-      err.status = 302;
-      throw err;
-    };
+  it('transitions to non-member when membership is pending (not yet active)', async () => {
+    window.sessionStorage.setItem(SESSION_STORAGE_KEYS.token, 'gho_pending');
+    octokitControl.getMembership = async () => ({ data: { role: 'member', state: 'pending' } });
 
     render(wrap(<Probe />));
 

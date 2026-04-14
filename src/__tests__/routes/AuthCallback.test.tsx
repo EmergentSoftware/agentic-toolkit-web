@@ -8,11 +8,16 @@ import { AuthCallbackRoute } from '@/routes/AuthCallback';
 import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
 function renderCallback(search: string, sessionOverride = {}) {
+  // Simulate the URL GitHub redirects to: query params in the real URL search,
+  // fragment for the HashRouter path.
+  const origin = window.location.origin;
+  window.history.replaceState({}, '', `${origin}/${search}#/auth/callback`);
+
   const completeSignIn = vi.fn();
   const session = makeSessionValue({ completeSignIn, ...sessionOverride });
   const utils = render(
     <SessionHarness session={session}>
-      <MemoryRouter initialEntries={[`/auth/callback${search}`]}>
+      <MemoryRouter initialEntries={['/auth/callback']}>
         <Routes>
           <Route element={<AuthCallbackRoute />} path='/auth/callback' />
           <Route element={<div data-testid='home'>home</div>} path='/' />
@@ -27,11 +32,13 @@ function renderCallback(search: string, sessionOverride = {}) {
 describe('AuthCallbackRoute', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.history.replaceState({}, '', '/');
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
     window.sessionStorage.clear();
+    window.history.replaceState({}, '', '/');
     vi.restoreAllMocks();
   });
 

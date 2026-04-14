@@ -77,11 +77,16 @@ export function consumePendingReturnPath(): string | undefined {
  * Default redirect URI for the callback route.
  *
  * HashRouter uses the fragment for routing, so callback URLs must include `#/`.
- * GitHub appends `?code=...&state=...` to the end of the URL; HashRouter then
- * parses the trailing query off the hash.
+ * GitHub appends `?code=...&state=...` to the URL *before* the fragment (RFC 6749),
+ * so AuthCallback reads OAuth params from `window.location.search`, not from the
+ * hash-router's search.
+ *
+ * Honors Vite's `base` config so the redirect URI matches the SPA's actual URL
+ * (important when deployed under a sub-path like GitHub Pages).
  */
 export function defaultRedirectUri(): string {
-  return `${window.location.origin}/#/auth/callback`;
+  const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+  return `${window.location.origin}${base}/#/auth/callback`;
 }
 
 /** Exchange an OAuth code for an access token via the auth-function broker. */

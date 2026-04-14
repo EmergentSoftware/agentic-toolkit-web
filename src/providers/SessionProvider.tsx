@@ -66,18 +66,32 @@ export function SessionProvider({ children }: SessionProviderProps) {
       };
       let membership = false;
       try {
-        await octokit.rest.orgs.checkMembershipForUser({
+        // /user/memberships/orgs/{org} — checks the AUTHENTICATED user's own
+        // membership. Works regardless of membership visibility (public/private)
+        // and does not depend on the "requester can see the org members" rule
+        // that trips up `checkMembershipForUser`.
+        const res = await octokit.rest.orgs.getMembershipForAuthenticatedUser({
           org: EMERGENT_ORG,
-          username: sessionUser.login,
         });
-        // Octokit throws on non-2xx; reaching here means 204 No Content → member.
-        membership = true;
+        membership = res.data.state === 'active';
       } catch (error: unknown) {
-        const status = (error as { status?: number }).status;
-        // 302: requester not a member of the org (GitHub redirects).
-        // 404: target user not a member.
-        // 403: forbidden (token lacks read:org, or membership hidden).
-        if (status === 404 || status === 302 || status === 403) membership = false;
+        const err = error as { message?: string; response?: { data?: unknown; headers?: Record<string, string> }; status?: number };
+        // eslint-disable-next-line no-console
+        console.warn('[SessionProvider] Org-membership check failed:', {
+          body: err.response?.data,
+          hint:
+            err.status === 404
+              ? 'Likely OAuth App restriction: the EmergentSoftware org must approve this OAuth App. Visit https://github.com/orgs/EmergentSoftware/policies/applications'
+              : err.status === 403
+                ? 'Likely SAML SSO: authorize the OAuth token for the org at https://github.com/settings/tokens'
+                : undefined,
+          message: err.message,
+          ssoHeader: err.response?.headers?.['x-github-sso'],
+          status: err.status,
+        });
+        // 404 → not a member OR OAuth App is not approved for the org.
+        // 403 → forbidden (token lacks read:org, or SAML SSO not authorized).
+        if (err.status === 404 || err.status === 403) membership = false;
         else throw error;
       }
       return { membership, user: sessionUser };
