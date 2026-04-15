@@ -235,8 +235,10 @@ export function BrowseRoute() {
     state: { columnVisibility, sorting },
   });
 
-  const navigateToAsset = (row: BrowseRow) =>
-    navigate(`/assets/${row.type}/${encodeURIComponent(row.name)}/${row.version}`);
+  const navigateToAsset = (row: BrowseRow) => {
+    const query = row.org ? `?org=${encodeURIComponent(row.org)}` : '';
+    navigate(`/assets/${row.type}/${encodeURIComponent(row.name)}/${row.version}${query}`);
+  };
 
   const setSearch = (value: string) => void setFilters({ q: value });
   const setTypeFilter = (next: Set<string>) => void setFilters({ types: [...next] });

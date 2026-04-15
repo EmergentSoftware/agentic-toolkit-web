@@ -1,0 +1,30 @@
+{
+	"$schema": "https://raw.githubusercontent.com/EmergentSoftware/agentic-toolkit-registry/main/schemas/manifest.schema.json",
+	"author": "JasonPaff",
+	"dependencies": [],
+	"description": "this is a test",
+	"entrypoint": "SKILL.md",
+	"files": [
+		"references/data-conventions.md",
+		"references/data-type-conventions.md",
+		"references/environment-conventions.md",
+		"references/formatting-examples.sql",
+		"references/formatting-rules.md",
+		"references/naming-conventions.md",
+		"references/sql-code-conventions.md",
+		"references/table-conventions.md"
+	],
+	"name": "transactional-sql",
+	"org": "agentic-toolkit-web",
+	"tags": [],
+	"tools": [
+		{
+			"tool": "claude-code"
+		},
+		{
+			"tool": "copilot-cli"
+		}
+	],
+	"type": "skill",
+	"version": "1.0.0"
+}
