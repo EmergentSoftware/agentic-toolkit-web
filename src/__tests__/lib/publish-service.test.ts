@@ -305,4 +305,73 @@ describe('publishContribution', () => {
     expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/manifest.json');
     expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/skill.md');
   });
+
+  it('strips a common wrapper folder added by browser folder uploads', async () => {
+    const queues = happyPathQueues();
+    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
+    queues.createTree = [treeSpy as Handler];
+    const { octokit } = makeFakeOctokit(queues);
+
+    await publishContribution({
+      files: [
+        { content: '# Skill body', path: 'emergent-brand/SKILL.md' },
+        { content: '# Guide', path: 'emergent-brand/references/guide.md' },
+      ],
+      manifest: { ...baseManifest(), name: 'emergent-brand-skill' } as Manifest,
+      octokit,
+      readme: '',
+      retry: fastRetry,
+    });
+
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
+    const paths = treeArgs.tree.map((entry) => entry.path);
+    expect(paths).toContain('assets/skills/emergent-brand-skill/1.0.0/SKILL.md');
+    expect(paths).toContain('assets/skills/emergent-brand-skill/1.0.0/references/guide.md');
+    for (const p of paths) {
+      expect(p).not.toContain('/emergent-brand/');
+    }
+  });
+
+  it('leaves flat file drops unchanged', async () => {
+    const queues = happyPathQueues();
+    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
+    queues.createTree = [treeSpy as Handler];
+    const { octokit } = makeFakeOctokit(queues);
+
+    await publishContribution({
+      files: [{ content: '# Skill body', path: 'SKILL.md' }],
+      manifest: baseManifest(),
+      octokit,
+      readme: '',
+      retry: fastRetry,
+    });
+
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
+    const paths = treeArgs.tree.map((entry) => entry.path);
+    expect(paths).toContain('assets/skills/my-skill/1.0.0/SKILL.md');
+    expect(paths).toContain('assets/skills/my-skill/1.0.0/manifest.json');
+  });
+
+  it('preserves divergent top-level directories without stripping', async () => {
+    const queues = happyPathQueues();
+    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
+    queues.createTree = [treeSpy as Handler];
+    const { octokit } = makeFakeOctokit(queues);
+
+    await publishContribution({
+      files: [
+        { content: 'x', path: 'a/x.md' },
+        { content: 'y', path: 'b/y.md' },
+      ],
+      manifest: baseManifest(),
+      octokit,
+      readme: '',
+      retry: fastRetry,
+    });
+
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
+    const paths = treeArgs.tree.map((entry) => entry.path);
+    expect(paths).toContain('assets/skills/my-skill/1.0.0/a/x.md');
+    expect(paths).toContain('assets/skills/my-skill/1.0.0/b/y.md');
+  });
 });
