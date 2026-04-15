@@ -156,7 +156,7 @@ describe('registry-client (Octokit-backed)', () => {
       expect(result.name).toBe('validate');
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: 'assets/agents/agentic-toolkit/validate/1.1.0/manifest.json',
+          path: 'assets/agents/@agentic-toolkit/validate/1.1.0/manifest.json',
         }),
       );
     });
@@ -198,7 +198,7 @@ describe('registry-client (Octokit-backed)', () => {
       expect(result).toBe(markdown);
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: 'assets/agents/agentic-toolkit/validate/1.1.0/README.md',
+          path: 'assets/agents/@agentic-toolkit/validate/1.1.0/README.md',
         }),
       );
     });

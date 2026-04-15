@@ -82,7 +82,7 @@ export async function fetchRegistry(options: RegistryClientOptions): Promise<Reg
 function buildAssetManifestPath(ref: AssetManifestRef): string {
   const typeDir = `${ref.type}s`;
   const parts = ['assets', typeDir];
-  if (ref.org) parts.push(ref.org);
+  if (ref.org) parts.push(`@${ref.org}`);
   parts.push(ref.name, ref.version, 'manifest.json');
   return parts.join('/');
 }

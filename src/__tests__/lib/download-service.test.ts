@@ -28,7 +28,7 @@ function buildUrl(
 ): string {
   const typeDir = `${type}s`;
   const parts = ['assets', typeDir];
-  if (org) parts.push(encodeURIComponent(org));
+  if (org) parts.push(`@${encodeURIComponent(org)}`);
   parts.push(encodeURIComponent(name), encodeURIComponent(version), path);
   return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/${parts.join('/')}`;
 }

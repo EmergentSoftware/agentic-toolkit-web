@@ -47,6 +47,7 @@ const ALL_COLUMN_IDS = ['name', 'type', 'description', 'version', 'tags', 'tools
 type ColumnId = (typeof ALL_COLUMN_IDS)[number];
 
 const COLUMN_VISIBILITY_STORAGE_KEY = 'atk.browse.columnVisibility';
+const SHOW_ORG_SCOPED_STORAGE_KEY = 'atk.browse.showOrgScoped';
 
 interface BrowseCardListProps {
   isDownloading: (ref: { name: string; org?: string; type: AssetType; version: string }) => boolean;
@@ -95,6 +96,15 @@ export function BrowseRoute() {
     }
   }, [columnVisibility]);
 
+  const [showOrgScoped, setShowOrgScoped] = useState<boolean>(loadShowOrgScoped);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SHOW_ORG_SCOPED_STORAGE_KEY, JSON.stringify(showOrgScoped));
+    } catch {
+      /* ignore persistence errors */
+    }
+  }, [showOrgScoped]);
+
   const assets = useMemo<RegistryAsset[]>(() => data?.assets ?? [], [data]);
 
   const { allOrgs, allTags, allTools } = useMemo(() => {
@@ -116,6 +126,7 @@ export function BrowseRoute() {
 
   const rows = useMemo<BrowseRow[]>(() => {
     const filtered = assets.filter((asset) => {
+      if (!showOrgScoped && orgFilter.size === 0 && asset.org) return false;
       if (typeFilter.size > 0 && !typeFilter.has(asset.type)) return false;
       if (tagFilter.size > 0 && !asset.tags.some((t) => tagFilter.has(t))) return false;
       const latest = asset.versions[asset.latest];
@@ -135,7 +146,7 @@ export function BrowseRoute() {
     }
 
     return ordered.map(toRow);
-  }, [assets, typeFilter, tagFilter, toolFilter, orgFilter, search]);
+  }, [assets, typeFilter, tagFilter, toolFilter, orgFilter, search, showOrgScoped]);
 
   const columns = useMemo<ColumnDef<BrowseRow>[]>(
     () => [
@@ -322,6 +333,18 @@ export function BrowseRoute() {
             options={allOrgs}
             selected={orgFilter}
           />
+          <label
+            className='flex cursor-pointer items-center gap-2 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm text-foreground hover:border-primary/60 hover:bg-accent'
+            htmlFor='toggle-show-org-scoped'
+          >
+            <Checkbox
+              checked={showOrgScoped}
+              data-testid='toggle-show-org-scoped'
+              id='toggle-show-org-scoped'
+              onChange={(event) => setShowOrgScoped(event.target.checked)}
+            />
+            <span>Show org-scoped assets</span>
+          </label>
           {hasActiveFilters ? (
             <Button
               className='ml-auto'
@@ -644,6 +667,18 @@ function loadColumnVisibility(): VisibilityState {
     return result;
   } catch {
     return {};
+  }
+}
+
+function loadShowOrgScoped(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(SHOW_ORG_SCOPED_STORAGE_KEY);
+    if (raw === null) return false;
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'boolean' ? parsed : false;
+  } catch {
+    return false;
   }
 }
 

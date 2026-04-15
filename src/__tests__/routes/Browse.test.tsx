@@ -81,6 +81,7 @@ function renderBrowse() {
 describe('BrowseRoute', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.localStorage.setItem('atk.browse.showOrgScoped', 'true');
   });
 
   afterEach(() => {
@@ -232,6 +233,47 @@ describe('BrowseRoute', () => {
     fireEvent.keyDown(screen.getByTestId('browse-row-feature-skill'), { key: 'Enter' });
 
     expect(screen.getByTestId('asset-route')).toBeInTheDocument();
+  });
+
+  it('hides org-scoped assets by default', () => {
+    window.localStorage.removeItem('atk.browse.showOrgScoped');
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBrowse();
+
+    expect(screen.queryByTestId('browse-row-validate')).not.toBeInTheDocument();
+    expect(screen.getByTestId('browse-row-dev-commands-rule')).toBeInTheDocument();
+  });
+
+  it('shows org-scoped assets when the toggle is enabled', async () => {
+    window.localStorage.removeItem('atk.browse.showOrgScoped');
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBrowse();
+
+    fireEvent.click(screen.getByTestId('toggle-show-org-scoped'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('browse-row-validate')).toBeInTheDocument();
+    });
+  });
+
+  it('persists the show-org-scoped toggle to localStorage', async () => {
+    window.localStorage.removeItem('atk.browse.showOrgScoped');
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBrowse();
+
+    fireEvent.click(screen.getByTestId('toggle-show-org-scoped'));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem('atk.browse.showOrgScoped')).toBe('true');
+    });
+  });
+
+  it('restores the show-org-scoped toggle from localStorage', () => {
+    window.localStorage.setItem('atk.browse.showOrgScoped', 'true');
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBrowse();
+
+    expect(screen.getByTestId('browse-row-validate')).toBeInTheDocument();
   });
 
   it('persists column visibility to localStorage', async () => {

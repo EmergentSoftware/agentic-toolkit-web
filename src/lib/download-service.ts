@@ -152,7 +152,7 @@ function buildFileUrl(ref: AssetRef, relativePath: string, options: DownloadAsse
   const repo = options.repo ?? DEFAULT_REPO;
   const typeDir = `${ref.type}s`;
   const parts = ['assets', typeDir];
-  if (ref.org) parts.push(encodePathSegment(ref.org));
+  if (ref.org) parts.push(encodePathSegment(`@${ref.org}`));
   parts.push(encodePathSegment(ref.name), encodePathSegment(ref.version));
   for (const segment of relativePath.split('/')) parts.push(encodePathSegment(segment));
   const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${parts.join('/')}`;
