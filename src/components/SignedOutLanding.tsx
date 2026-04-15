@@ -12,7 +12,7 @@ export function SignedOutLanding() {
       className='mx-auto flex max-w-2xl flex-col items-center gap-6 py-16 text-center'
       data-testid='signed-out-landing'
     >
-      <img alt='' aria-hidden='true' className='h-16 w-16' src='/logomark.svg' />
+      <img alt='' aria-hidden='true' className='h-16 w-16' src={`${import.meta.env.BASE_URL}logomark.svg`} />
       <div className='flex flex-col gap-3'>
         <h1 className='text-4xl font-semibold tracking-tight text-foreground'>Agentic Toolkit</h1>
         <p className='text-base text-muted-foreground'>

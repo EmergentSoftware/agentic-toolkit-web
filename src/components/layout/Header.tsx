@@ -32,7 +32,7 @@ export function Header() {
   const showSignOut = status === 'member' || status === 'non-member' || status === 'verifying';
   const showSignIn = status === 'signed-out';
 
-  const wordmark = resolvedTheme === 'dark' ? '/logo-white-text.svg' : '/logo-dark-text.svg';
+  const wordmark = `${import.meta.env.BASE_URL}${resolvedTheme === 'dark' ? 'logo-white-text.svg' : 'logo-dark-text.svg'}`;
 
   return (
     <header
@@ -50,7 +50,7 @@ export function Header() {
             alt=''
             aria-hidden='true'
             className='h-8 w-8 shrink-0'
-            src='/logomark.svg'
+            src={`${import.meta.env.BASE_URL}logomark.svg`}
           />
           <img alt='Agentic Toolkit' className='h-5 w-auto' src={wordmark} />
         </NavLink>

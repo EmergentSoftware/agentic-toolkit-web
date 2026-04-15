@@ -6,7 +6,7 @@ export function Footer() {
     >
       <div className='mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6'>
         <div className='flex items-center gap-2'>
-          <img alt='' aria-hidden='true' className='h-4 w-4' src='/logomark.svg' />
+          <img alt='' aria-hidden='true' className='h-4 w-4' src={`${import.meta.env.BASE_URL}logomark.svg`} />
           <span>© {new Date().getFullYear()} Emergent Software — Agentic Toolkit</span>
         </div>
         <span>
