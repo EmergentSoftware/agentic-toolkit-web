@@ -15,7 +15,7 @@ export function parseAllowedOrigins(configured: string | undefined): string[] {
       if (trimmed) set.add(trimmed);
     }
   }
-  return [...set];
+  return Array.from(set);
 }
 
 export function resolveCorsHeaders(
