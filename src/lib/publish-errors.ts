@@ -1,4 +1,5 @@
-/** Error classes raised by the contribution publish pipeline. */
+/* eslint-disable perfectionist/sort-modules */
+/** Error classes raised by the contribution publish pipeline. Base class PublishError must precede subclasses. */
 
 /** Base class for publish pipeline errors. Every subclass carries a user-facing `userMessage`. */
 export class PublishError extends Error {

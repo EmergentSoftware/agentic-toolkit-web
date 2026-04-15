@@ -46,7 +46,7 @@ function makeFile(name: string, content = '# content') {
 
 function renderContribute(
   login = 'test-user',
-  options: { initialEntries?: string[]; octokit?: Octokit | null } = {},
+  options: { initialEntries?: string[]; octokit?: null | Octokit } = {},
 ) {
   const session = makeSessionValue({
     octokit: options.octokit ?? null,

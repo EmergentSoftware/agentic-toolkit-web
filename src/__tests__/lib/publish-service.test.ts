@@ -1,6 +1,9 @@
+/* eslint-disable perfectionist/sort-modules */
 import type { Octokit } from '@octokit/rest';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { Manifest } from '@/lib/schemas/manifest';
 
 import {
   PublishBranchCollisionError,
@@ -10,20 +13,15 @@ import {
   PublishRateLimitError,
 } from '@/lib/publish-errors';
 import { DRY_RUN_PR_URL_MARKER, publishContribution } from '@/lib/publish-service';
-import type { Manifest } from '@/lib/schemas/manifest';
 
 const fastRetry = { baseDelayMs: 1, jitter: false, maxDelayMs: 5, maxRetries: 0 } as const;
 
-function httpError(status: number, message = `HTTP ${status}`, extra: Record<string, unknown> = {}): Error & {
-  status: number;
-} {
-  const err = new Error(message) as Error & { status: number };
-  err.status = status;
-  Object.assign(err, extra);
-  return err;
-}
-
 type Handler = (input: unknown) => Promise<unknown> | unknown;
+
+interface FakeOctokitResult {
+  octokit: Octokit;
+  spies: Record<keyof OctokitQueues, ReturnType<typeof vi.fn>>;
+}
 
 interface OctokitQueues {
   createBlob?: Handler[];
@@ -37,19 +35,30 @@ interface OctokitQueues {
   reposGet?: Handler[];
 }
 
-interface FakeOctokitResult {
-  octokit: Octokit;
-  spies: Record<keyof OctokitQueues, ReturnType<typeof vi.fn>>;
+function baseFiles() {
+  return [{ content: '# Skill body', path: 'skill.md' }];
 }
 
-function queue(items: Handler[] | undefined): ReturnType<typeof vi.fn> {
-  const pending = items ?? [];
-  return vi.fn(async (args: unknown) => {
-    const next = pending.shift();
-    if (!next) throw new Error('fakeOctokit queue exhausted');
-    const result = await next(args);
-    return result;
-  });
+function baseManifest(): Manifest {
+  return {
+    author: 'octo-login',
+    description: 'A helpful skill',
+    entrypoint: 'skill.md',
+    name: 'my-skill',
+    tags: ['test'],
+    tools: [{ tool: 'claude-code' }],
+    type: 'skill',
+    version: '1.0.0',
+  } as Manifest;
+}
+
+function httpError(status: number, message = `HTTP ${status}`, extra: Record<string, unknown> = {}): Error & {
+  status: number;
+} {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  Object.assign(err, extra);
+  return err;
 }
 
 function makeFakeOctokit(queues: OctokitQueues): FakeOctokitResult {
@@ -86,26 +95,23 @@ function makeFakeOctokit(queues: OctokitQueues): FakeOctokitResult {
   return { octokit, spies };
 }
 
-function baseManifest(): Manifest {
-  return {
-    author: 'octo-login',
-    description: 'A helpful skill',
-    entrypoint: 'skill.md',
-    name: 'my-skill',
-    tags: ['test'],
-    tools: [{ tool: 'claude-code' }],
-    type: 'skill',
-    version: '1.0.0',
-  } as Manifest;
-}
-
-function baseFiles() {
-  return [{ content: '# Skill body', path: 'skill.md' }];
+function queue(items: Handler[] | undefined): ReturnType<typeof vi.fn> {
+  const pending = items ?? [];
+  return vi.fn(async (args: unknown) => {
+    const next = pending.shift();
+    if (!next) throw new Error('fakeOctokit queue exhausted');
+    const result = await next(args);
+    return result;
+  });
 }
 
 function happyPathQueues(): OctokitQueues {
   return {
-    createBlob: [() => ({ data: { sha: 'blob-1' } }), () => ({ data: { sha: 'blob-2' } })],
+    createBlob: [
+      () => ({ data: { sha: 'blob-1' } }),
+      () => ({ data: { sha: 'blob-2' } }),
+      () => ({ data: { sha: 'blob-3' } }),
+    ],
     createCommit: [() => ({ data: { sha: 'commit-sha' } })],
     createRef: [() => ({ data: {} })],
     createTree: [() => ({ data: { sha: 'tree-sha' } })],
@@ -377,7 +383,7 @@ describe('publishContribution', () => {
     });
 
     expect(treeSpy).toHaveBeenCalledTimes(1);
-    const treeArgs = treeSpy.mock.calls[0]![0] as { tree: Array<{ path: string }> };
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
     const paths = treeArgs.tree.map((entry) => entry.path);
     expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/manifest.json');
     expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/skill.md');

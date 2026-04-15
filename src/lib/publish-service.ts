@@ -1,4 +1,7 @@
+/* eslint-disable perfectionist/sort-modules */
 import type { Octokit } from '@octokit/rest';
+
+import type { Manifest } from './schemas/manifest';
 
 import { callWithRetry, type RetryOptions } from './fetch-retry';
 import {
@@ -9,7 +12,6 @@ import {
   PublishNetworkError,
 } from './publish-errors';
 import { DEFAULT_OWNER, DEFAULT_REPO } from './registry-client';
-import type { Manifest } from './schemas/manifest';
 
 export interface PublishFileEntry {
   content: string;
