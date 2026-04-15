@@ -675,21 +675,25 @@ function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }
   );
 }
 
+const DEFAULT_COLUMN_VISIBILITY: VisibilityState = { tools: false };
+
 function loadColumnVisibility(): VisibilityState {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === 'undefined') return { ...DEFAULT_COLUMN_VISIBILITY };
   try {
     const raw = window.localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return { ...DEFAULT_COLUMN_VISIBILITY };
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const result: VisibilityState = {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_COLUMN_VISIBILITY };
+    }
+    const result: VisibilityState = { ...DEFAULT_COLUMN_VISIBILITY };
     for (const id of ALL_COLUMN_IDS) {
       const value = (parsed as Record<string, unknown>)[id];
       if (typeof value === 'boolean') result[id] = value;
     }
     return result;
   } catch {
-    return {};
+    return { ...DEFAULT_COLUMN_VISIBILITY };
   }
 }
 
