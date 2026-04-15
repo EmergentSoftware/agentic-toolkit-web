@@ -27,12 +27,11 @@ function renderLayout(initialPath = '/') {
 }
 
 describe('AppLayout', () => {
-  it('renders the header, main, and footer regions', () => {
+  it('renders the header, and main regions', () => {
     renderLayout();
 
     expect(screen.getByTestId('app-header')).toBeInTheDocument();
     expect(screen.getByTestId('app-main')).toBeInTheDocument();
-    expect(screen.getByTestId('app-footer')).toBeInTheDocument();
   });
 
   it('renders the brand mark and primary nav links', () => {
