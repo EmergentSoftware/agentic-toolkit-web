@@ -10,9 +10,9 @@ export function isOriginAllowed(
 export function parseAllowedOrigins(configured: string | undefined): string[] {
   const set = new Set<string>([DEV_ORIGIN]);
   if (configured) {
-    for (const raw of configured.split(',')) {
-      const trimmed = raw.trim();
-      if (trimmed) set.add(trimmed);
+    for (const entry of splitConfigured(configured)) {
+      const cleaned = stripQuotes(entry.trim());
+      if (cleaned) set.add(cleaned);
     }
   }
   return Array.from(set);
@@ -32,4 +32,30 @@ export function resolveCorsHeaders(
     headers['Access-Control-Max-Age'] = '600';
   }
   return headers;
+}
+
+function splitConfigured(configured: string): string[] {
+  const trimmed = configured.trim();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => (typeof v === 'string' ? v : String(v)));
+      }
+    } catch {
+      // Fall through to CSV parsing on malformed JSON.
+    }
+  }
+  return trimmed.split(',');
+}
+
+function stripQuotes(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' || first === "'") && first === last) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
 }
