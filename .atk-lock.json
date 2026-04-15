@@ -1,0 +1,77 @@
+{
+	"assets": [
+		{
+			"dependencies": [],
+			"description": "This skill defines the visual identity for Emergent Software. Apply it to every visual output -- HTML files, slides, documents, diagrams, playgrounds, charts, and anything a client or colleague will see.",
+			"files": [
+				{
+					"checksum": "587a82918b5cf21ac9bc8bae4c93a9afe648df364c49d78cfeb84f062a88fb28",
+					"sourcePath": "SKILL.md"
+				},
+				{
+					"checksum": "a1597b03a7234f30c8122771e88fffe343ce891f5fd7eb81b848770676f0d72d",
+					"sourcePath": "assets/logo-dark-text.svg"
+				},
+				{
+					"checksum": "fa260f47803c4b9805ac1e0f71338c82534f77d721d245c96d4beb583aed2e6d",
+					"sourcePath": "assets/logo-white-text.svg"
+				},
+				{
+					"checksum": "963967f44b86570dddc69f218dd477fab383e797d37daac9503e0b02e5a0d6c4",
+					"sourcePath": "assets/logomark.svg"
+				},
+				{
+					"checksum": "1bca6af6871298e7272730e347d12269059bd9643ea8d396ca6bc6d90aa688be",
+					"sourcePath": "evals/evals.json"
+				},
+				{
+					"checksum": "0315e3c412faa5498ca9043ae8a8eff316ad3fe075fccc4b6944db7e255f7eda",
+					"sourcePath": "references/charts.md"
+				},
+				{
+					"checksum": "0c38179de9f7aefa7eb5ba5bebc232b5e5c7c11f97983f7956c31fe9b0b4d5bc",
+					"sourcePath": "references/color-palette.md"
+				},
+				{
+					"checksum": "6f5b07a644c00005841ea678627773c1639208987786b2138b37efc1d0ab57ac",
+					"sourcePath": "references/dark-theme.md"
+				},
+				{
+					"checksum": "62c46b8e85d8faa15dae2e520d0efb8025974eca2fd615084a65d1ccc70eb20e",
+					"sourcePath": "references/interactive-html.md"
+				},
+				{
+					"checksum": "28290345a630c6fc38e13f61742df67fc13713576e67d5cf71586e998b6cd9a1",
+					"sourcePath": "references/light-theme.md"
+				},
+				{
+					"checksum": "bd1af9bfcd38f31f123c02f13e52385ede31c43b08826fbb9273057a1fd02799",
+					"sourcePath": "references/logo-usage.md"
+				},
+				{
+					"checksum": "23f75a4e5ea108396fda410cf7c234f5247815e0a3fb734b3dbcdc05d85a84ee",
+					"sourcePath": "references/powerpoint.md"
+				},
+				{
+					"checksum": "cbf8f78062f097d934562a51d630aa02f76fc1aa8860cec1e8c6f1c31a0246e8",
+					"sourcePath": "references/spacing-layout.md"
+				},
+				{
+					"checksum": "80a91bd597a4882ef0ebf7d7f0b6d02184a2c3b07d20ac8d72403e5cf7407bc2",
+					"sourcePath": "references/typography.md"
+				},
+				{
+					"checksum": "7ad78856d2513ccd0e95d50bd3698c906f899db51509f2b58659caa8e7627e1f",
+					"sourcePath": "references/word-documents.md"
+				}
+			],
+			"installedAt": "2026-04-15T17:01:08.242Z",
+			"installReason": "direct",
+			"name": "emergent-brand",
+			"type": "skill",
+			"version": "1.1.0"
+		}
+	],
+	"lockVersion": 1,
+	"org": "agentic-toolkit-web"
+}
