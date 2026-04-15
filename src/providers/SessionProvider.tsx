@@ -76,7 +76,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
         membership = res.data.state === 'active';
       } catch (error: unknown) {
         const err = error as { message?: string; response?: { data?: unknown; headers?: Record<string, string> }; status?: number };
-        // eslint-disable-next-line no-console
+         
         console.warn('[SessionProvider] Org-membership check failed:', {
           body: err.response?.data,
           hint:

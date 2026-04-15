@@ -7,37 +7,6 @@ import { Button } from '@/components/ui/button';
 import { useSession } from '@/hooks/useSession';
 import { consumeOAuthState, exchangeCodeForToken } from '@/lib/session';
 
-/**
- * Read OAuth callback parameters from the URL.
- *
- * GitHub appends `?code=...&state=...` to the redirect URI *before* any
- * fragment (RFC 6749). Under HashRouter this means the params sit in
- * `window.location.search`, not inside the hash-router's search — so we must
- * read them off the raw URL rather than using `useSearchParams()`.
- *
- * We also accept params placed inside the hash (`#/auth/callback?code=...`)
- * as a fallback, which is how some OAuth providers behave.
- */
-function readCallbackParams(): { code: null | string; state: null | string } {
-  const fromSearch = new URLSearchParams(window.location.search);
-  if (fromSearch.has('code') || fromSearch.has('state')) {
-    return { code: fromSearch.get('code'), state: fromSearch.get('state') };
-  }
-  const hash = window.location.hash;
-  const queryIndex = hash.indexOf('?');
-  if (queryIndex >= 0) {
-    const fromHash = new URLSearchParams(hash.slice(queryIndex + 1));
-    return { code: fromHash.get('code'), state: fromHash.get('state') };
-  }
-  return { code: null, state: null };
-}
-
-/** Strip the OAuth params from the visible URL so `code`/`state` don't leak into history. */
-function scrubUrl(): void {
-  const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-  window.history.replaceState({}, '', cleanUrl);
-}
-
 export function AuthCallbackRoute() {
   const navigate = useNavigate();
   const { completeSignIn } = useSession();
@@ -100,6 +69,37 @@ export function AuthCallbackRoute() {
       <LoadingIndicator label='Exchanging authorization code…' />
     </>
   );
+}
+
+/**
+ * Read OAuth callback parameters from the URL.
+ *
+ * GitHub appends `?code=...&state=...` to the redirect URI *before* any
+ * fragment (RFC 6749). Under HashRouter this means the params sit in
+ * `window.location.search`, not inside the hash-router's search — so we must
+ * read them off the raw URL rather than using `useSearchParams()`.
+ *
+ * We also accept params placed inside the hash (`#/auth/callback?code=...`)
+ * as a fallback, which is how some OAuth providers behave.
+ */
+function readCallbackParams(): { code: null | string; state: null | string } {
+  const fromSearch = new URLSearchParams(window.location.search);
+  if (fromSearch.has('code') || fromSearch.has('state')) {
+    return { code: fromSearch.get('code'), state: fromSearch.get('state') };
+  }
+  const hash = window.location.hash;
+  const queryIndex = hash.indexOf('?');
+  if (queryIndex >= 0) {
+    const fromHash = new URLSearchParams(hash.slice(queryIndex + 1));
+    return { code: fromHash.get('code'), state: fromHash.get('state') };
+  }
+  return { code: null, state: null };
+}
+
+/** Strip the OAuth params from the visible URL so `code`/`state` don't leak into history. */
+function scrubUrl(): void {
+  const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+  window.history.replaceState({}, '', cleanUrl);
 }
 
 export default AuthCallbackRoute;
