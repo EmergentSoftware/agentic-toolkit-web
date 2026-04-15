@@ -14,6 +14,7 @@ import { AuthCallbackRoute } from '@/routes/AuthCallback';
 import { BundleDetailRoute } from '@/routes/BundleDetail';
 import { BundlesRoute } from '@/routes/Bundles';
 import { ContributeRoute } from '@/routes/Contribute';
+import { ContributeSuccessRoute } from '@/routes/ContributeSuccess';
 import { IndexRoute } from '@/routes/Index';
 import { NotAuthorizedRoute } from '@/routes/NotAuthorized';
 import { NotFoundRoute } from '@/routes/NotFound';
@@ -91,6 +92,16 @@ export function App() {
                     </RouteBoundary>
                   }
                   path='contribute'
+                />
+                <Route
+                  element={
+                    <RouteBoundary scope='Contribute success'>
+                      <RequireAuth>
+                        <ContributeSuccessRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='contribute/success'
                 />
                 <Route
                   element={

@@ -6,8 +6,8 @@ import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from '.
 import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 import { type Registry, RegistrySchema } from './schemas/registry';
 
-const DEFAULT_OWNER = 'EmergentSoftware';
-const DEFAULT_REPO = 'agentic-toolkit-registry';
+export const DEFAULT_OWNER = 'EmergentSoftware';
+export const DEFAULT_REPO = 'agentic-toolkit-registry';
 
 /** A pointer to a specific asset version in the registry. */
 export interface AssetManifestRef {

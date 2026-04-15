@@ -1,6 +1,11 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import type { Octokit } from '@octokit/rest';
+
+import { Toast } from '@base-ui-components/react/toast';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as publishServiceModule from '@/lib/publish-service';
 import {
   buildManifestInput,
   ContributeRoute,
@@ -39,16 +44,28 @@ function makeFile(name: string, content = '# content') {
   return new File([content], name, { type: 'text/markdown' });
 }
 
-function renderContribute(login = 'test-user') {
+function renderContribute(
+  login = 'test-user',
+  options: { initialEntries?: string[]; octokit?: Octokit | null } = {},
+) {
   const session = makeSessionValue({
+    octokit: options.octokit ?? null,
     status: 'member',
     user: { avatarUrl: null, login, name: null },
   });
   return render(
-    <SessionHarness session={session}>
-      <ContributeRoute />
-    </SessionHarness>,
+    <MemoryRouter initialEntries={options.initialEntries ?? ['/contribute']}>
+      <SessionHarness session={session}>
+        <ToastProviderStub>
+          <ContributeRoute />
+        </ToastProviderStub>
+      </SessionHarness>
+    </MemoryRouter>,
   );
+}
+
+function ToastProviderStub({ children }: { children: React.ReactNode }) {
+  return <Toast.Provider>{children}</Toast.Provider>;
 }
 
 async function uploadFiles(files: File[]) {
@@ -250,9 +267,17 @@ describe('Contribute — wizard UI', () => {
     expect((screen.getByTestId('field-readme') as HTMLTextAreaElement).value).toContain('# From file');
   });
 
-  it('runs a happy-path end-to-end submission and clears the draft on success', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    renderContribute('octo-login');
+  it('runs a happy-path end-to-end submission and calls the publish service', async () => {
+    const publishSpy = vi
+      .spyOn(publishServiceModule, 'publishContribution')
+      .mockResolvedValue({
+        branchName: 'asset/skill/happy-path-skill/1.0.0',
+        dryRun: false,
+        prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/9',
+      });
+
+    const fakeOctokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', { octokit: fakeOctokit });
 
     // Step 1
     fireEvent.click(screen.getByTestId('asset-type-skill'));
@@ -274,15 +299,66 @@ describe('Contribute — wizard UI', () => {
     expect(screen.getByTestId('review-valid')).toBeInTheDocument();
     const submit = screen.getByTestId('wizard-submit');
     expect(submit).not.toBeDisabled();
-    fireEvent.click(submit);
-
-    expect(logSpy).toHaveBeenCalled();
-    const [, payload] = logSpy.mock.calls[0]!;
-    expect(payload).toMatchObject({
-      manifest: { author: 'octo-login', name: 'happy-path-skill', type: 'skill', version: '1.0.0' },
-      readme: '# Hello',
+    await act(async () => {
+      fireEvent.click(submit);
     });
-    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+
+    await waitFor(() => {
+      expect(publishSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const callArgs = publishSpy.mock.calls[0]![0];
+    expect(callArgs).toMatchObject({
+      dryRun: false,
+      manifest: expect.objectContaining({
+        author: 'octo-login',
+        name: 'happy-path-skill',
+        type: 'skill',
+        version: '1.0.0',
+      }),
+      octokit: fakeOctokit,
+      readme: '# Hello',
+      user: { login: 'octo-login' },
+    });
+    expect(callArgs.files).toEqual([
+      expect.objectContaining({ content: '# Skill', path: 'skill.md' }),
+    ]);
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+    });
+  });
+
+  it('enables dry-run mode when ?dryRun=1 is present in the URL', async () => {
+    const publishSpy = vi
+      .spyOn(publishServiceModule, 'publishContribution')
+      .mockResolvedValue({
+        branchName: 'asset/skill/dry-skill/1.0.0',
+        dryRun: true,
+        prUrl: publishServiceModule.DRY_RUN_PR_URL_MARKER,
+      });
+
+    const fakeOctokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', {
+      initialEntries: ['/contribute?dryRun=1'],
+      octokit: fakeOctokit,
+    });
+
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('skill.md', '# Skill')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fillMetadata({ description: 'desc', name: 'dry-skill' });
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('wizard-submit'));
+    });
+
+    await waitFor(() => {
+      expect(publishSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(publishSpy.mock.calls[0]![0]).toMatchObject({ dryRun: true });
   });
 
   it('keeps the Submit button disabled while validation fails', async () => {

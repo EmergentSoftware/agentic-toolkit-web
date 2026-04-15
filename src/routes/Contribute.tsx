@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { valid as semverValid } from 'semver';
 import { z } from 'zod';
 
+import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionHeader } from '@/components/SectionHeader';
@@ -14,6 +16,9 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/useSession';
+import { useToast } from '@/hooks/useToast';
+import { PublishError } from '@/lib/publish-errors';
+import { publishContribution, type PublishProgressEvent } from '@/lib/publish-service';
 import { AssetType, type Manifest, ManifestSchema } from '@/lib/schemas/manifest';
 
 export const DRAFT_STORAGE_KEY = 'atk:contribute:draft';
@@ -104,6 +109,7 @@ interface WizardNavProps {
   onNext: () => void;
   onSubmit: () => void;
   step: number;
+  submitting?: boolean;
 }
 
 export function buildManifestInput(draft: DraftState): Record<string, unknown> {
@@ -130,11 +136,23 @@ export function clearDraftFromStorage(): void {
 }
 
 export function ContributeRoute() {
-  const { user } = useSession();
+  const { octokit, user } = useSession();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
   const defaultAuthor = user?.login ?? '';
   const [draft, setDraft] = useState<DraftState>(() => createInitialDraft(defaultAuthor));
+  const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
   const hydratedRef = useRef(false);
   const skipNextPersistRef = useRef(false);
+
+  const dryRun = useMemo(() => {
+    const search = location.search || window.location.hash.split('?')[1] || '';
+    if (!search) return false;
+    const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+    return params.get('dryRun') === '1';
+  }, [location.search]);
 
   useEffect(() => {
     if (hydratedRef.current) return;
@@ -170,19 +188,59 @@ export function ContributeRoute() {
   const next = () => goTo(draft.step + 1);
   const back = () => goTo(draft.step - 1);
 
-  const onSubmit = () => {
+  const onSubmit = async () => {
     const result = validateDraft(draft);
     if (!result.success) return;
-    const payload = {
-      files: draft.files,
-      manifest: result.data,
-      readme: draft.readme,
-    };
-     
-    console.log('[Contribute] Phase 9 stub submission:', payload);
-    skipNextPersistRef.current = true;
-    clearDraftFromStorage();
-    setDraft(createInitialDraft(defaultAuthor));
+    if (submitting) return;
+    if (!octokit || !user) {
+      toast.add({
+        description: 'You need to be signed in to submit a contribution.',
+        priority: 'high',
+        title: 'Not signed in',
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    setProgress({ message: 'Preparing your workspace', step: 'preparing-workspace' });
+
+    try {
+      const publishResult = await publishContribution({
+        dryRun,
+        files: draft.files.map((f) => ({ content: f.content, path: f.path })),
+        manifest: result.data,
+        octokit,
+        onProgress: (event) => setProgress(event),
+        readme: draft.readme,
+        user: { login: user.login },
+      });
+      skipNextPersistRef.current = true;
+      clearDraftFromStorage();
+      setDraft(createInitialDraft(defaultAuthor));
+      navigate('/contribute/success', {
+        replace: true,
+        state: {
+          branchName: publishResult.branchName,
+          dryRun: publishResult.dryRun,
+          prUrl: publishResult.prUrl,
+        },
+      });
+    } catch (error) {
+      const message =
+        error instanceof PublishError
+          ? error.userMessage
+          : error instanceof Error
+            ? error.message
+            : 'An unexpected error occurred while publishing.';
+      toast.add({
+        description: message,
+        priority: 'high',
+        title: 'Submission failed',
+      });
+    } finally {
+      setSubmitting(false);
+      setProgress(null);
+    }
   };
 
   return (
@@ -204,14 +262,32 @@ export function ContributeRoute() {
         {draft.step === 2 && <StepMetadata draft={draft} onChange={update} />}
         {draft.step === 3 && <StepReadme draft={draft} onChange={update} />}
         {draft.step === 4 && <StepReview draft={draft} validation={validation} />}
+        {submitting && progress ? (
+          <div
+            aria-live='polite'
+            className='rounded-md border border-border bg-card p-4'
+            data-testid='publish-progress'
+            role='status'
+          >
+            <LoadingIndicator label={progress.message} />
+            {dryRun ? (
+              <p className='pt-1 text-xs text-muted-foreground' data-testid='publish-progress-dry-run'>
+                Dry run mode — no pull request will be created.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <WizardNav
           canProceed={stepValid.canProceedFrom[draft.step]}
-          canSubmit={validation.success}
+          canSubmit={validation.success && !submitting}
           isLast={draft.step === STEPS.length - 1}
           onBack={back}
           onNext={next}
-          onSubmit={onSubmit}
+          onSubmit={() => {
+            void onSubmit();
+          }}
           step={draft.step}
+          submitting={submitting}
         />
       </section>
     </>
@@ -862,15 +938,21 @@ function StepType({ draft, onChange }: StepProps) {
   );
 }
 
-function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, step }: WizardNavProps) {
+function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, step, submitting }: WizardNavProps) {
   return (
     <div className='flex items-center justify-between gap-2 pt-2'>
-      <Button data-testid='wizard-back' disabled={step === 0} onClick={onBack} type='button' variant='outline'>
+      <Button
+        data-testid='wizard-back'
+        disabled={step === 0 || submitting}
+        onClick={onBack}
+        type='button'
+        variant='outline'
+      >
         Back
       </Button>
       {isLast ? (
         <Button data-testid='wizard-submit' disabled={!canSubmit} onClick={onSubmit} type='button'>
-          Submit contribution
+          {submitting ? 'Submitting…' : 'Submit contribution'}
         </Button>
       ) : (
         <Button data-testid='wizard-next' disabled={!canProceed} onClick={onNext} type='button'>
@@ -880,3 +962,4 @@ function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, st
     </div>
   );
 }
+
