@@ -59,7 +59,7 @@ export function scoreAsset(asset: RegistryAsset, terms: string[], fullQuery: str
   const latest = asset.versions[asset.latest];
   const descLower = (latest?.description ?? '').toLowerCase();
   const authorLower = (latest?.author ?? '').toLowerCase();
-  return scoreItem(nameLower, descLower, authorLower, asset.tags, terms, fullQuery);
+  return scoreItem(nameLower, descLower, authorLower, asset.tags, terms, fullQuery, asset.org);
 }
 
 /** Score a registry bundle. */
@@ -67,7 +67,7 @@ export function scoreBundle(bundle: RegistryBundle, terms: string[], fullQuery: 
   const nameLower = bundle.name.toLowerCase();
   const descLower = bundle.description.toLowerCase();
   const authorLower = bundle.author.toLowerCase();
-  return scoreItem(nameLower, descLower, authorLower, bundle.tags, terms, fullQuery);
+  return scoreItem(nameLower, descLower, authorLower, bundle.tags, terms, fullQuery, bundle.org);
 }
 
 /**
@@ -81,8 +81,10 @@ export function scoreItem(
   tags: string[],
   terms: string[],
   fullQuery: string,
+  org?: string,
 ): number {
   let score = 0;
+  const orgLower = (org ?? '').toLowerCase();
 
   if (name === fullQuery) {
     score += 100;
@@ -94,11 +96,16 @@ export function scoreItem(
     score += 20;
   }
 
+  if (orgLower && orgLower === fullQuery) {
+    score += 15;
+  }
+
   for (const term of terms) {
     if (name.includes(term)) score += 10;
     if (description.includes(term)) score += 5;
     if (tags.some((t) => t.toLowerCase() === term)) score += 8;
     if (author.includes(term)) score += 3;
+    if (orgLower && orgLower.includes(term)) score += 5;
   }
 
   return score;

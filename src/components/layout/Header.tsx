@@ -52,7 +52,7 @@ export function Header() {
             className='h-8 w-8 shrink-0'
             src={`${import.meta.env.BASE_URL}logomark.svg`}
           />
-          <img alt='Agentic Toolkit' className='h-5 w-auto' src={wordmark} />
+          <span className='text-base font-semibold'>Agentic Toolkit</span>
         </NavLink>
 
         <nav aria-label='Primary' className='flex flex-1 items-center gap-1'>
@@ -74,6 +74,7 @@ export function Header() {
         </nav>
 
         <div className='flex items-center gap-2'>
+          <img alt='Emergent Software' className='mr-2 hidden h-5 w-auto sm:block' src={wordmark} />
           <ThemeToggle />
           {showSignIn ? (
             <Button

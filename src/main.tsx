@@ -1,3 +1,4 @@
+import { NuqsAdapter } from 'nuqs/adapters/react-router/v7';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter } from 'react-router';
@@ -11,7 +12,9 @@ if (!rootElement) throw new Error('Root element #root not found in index.html');
 createRoot(rootElement).render(
   <StrictMode>
     <HashRouter>
-      <App />
+      <NuqsAdapter>
+        <App />
+      </NuqsAdapter>
     </HashRouter>
   </StrictMode>,
 );

@@ -1,3 +1,4 @@
+import { Popover } from '@base-ui-components/react/popover';
 import {
   type ColumnDef,
   flexRender,
@@ -7,15 +8,17 @@ import {
   useReactTable,
   type VisibilityState,
 } from '@tanstack/react-table';
-import { useMemo, useState } from 'react';
+import { Columns3, X } from 'lucide-react';
+import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import type { AssetType } from '@/lib/schemas/manifest';
 import type { RegistryAsset } from '@/lib/schemas/registry';
 
 import { EmptyState } from '@/components/EmptyState';
-import { FilterGroup } from '@/components/FilterGroup';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
+import { MultiSelectFilter } from '@/components/MultiSelectFilter';
 import { PageHeader } from '@/components/PageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,6 +44,9 @@ interface BrowseRow {
 const ASSET_TYPES: AssetType[] = ['skill', 'agent', 'rule', 'hook', 'memory-template', 'mcp-config'];
 
 const ALL_COLUMN_IDS = ['name', 'type', 'description', 'version', 'tags', 'tools', 'org', 'actions'] as const;
+type ColumnId = (typeof ALL_COLUMN_IDS)[number];
+
+const COLUMN_VISIBILITY_STORAGE_KEY = 'atk.browse.columnVisibility';
 
 interface BrowseCardListProps {
   isDownloading: (ref: { name: string; org?: string; type: AssetType; version: string }) => boolean;
@@ -50,6 +56,7 @@ interface BrowseCardListProps {
 }
 
 interface BrowseTableProps {
+  columnsControl: React.ReactNode;
   onRowClick: (row: BrowseRow) => void;
   table: ReturnType<typeof useReactTable<BrowseRow>>;
 }
@@ -59,25 +66,52 @@ export function BrowseRoute() {
   const navigate = useNavigate();
   const { download, isDownloading } = useDownloadAsset();
 
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<Set<AssetType>>(new Set());
-  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
-  const [toolFilter, setToolFilter] = useState<Set<string>>(new Set());
-  const [orgOnly, setOrgOnly] = useState(false);
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [filters, setFilters] = useQueryStates({
+    orgs: parseAsArrayOf(parseAsString).withDefault([]),
+    q: parseAsString.withDefault(''),
+    sort: parseAsString.withDefault(''),
+    tags: parseAsArrayOf(parseAsString).withDefault([]),
+    tools: parseAsArrayOf(parseAsString).withDefault([]),
+    types: parseAsArrayOf(parseAsString).withDefault([]),
+  });
+
+  const search = filters.q;
+  const typeFilter = useMemo(() => new Set(filters.types as AssetType[]), [filters.types]);
+  const tagFilter = useMemo(() => new Set(filters.tags), [filters.tags]);
+  const toolFilter = useMemo(() => new Set(filters.tools), [filters.tools]);
+  const orgFilter = useMemo(() => new Set(filters.orgs), [filters.orgs]);
+
+  const sorting = useMemo<SortingState>(() => parseSort(filters.sort), [filters.sort]);
+
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(loadColumnVisibility);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COLUMN_VISIBILITY_STORAGE_KEY,
+        JSON.stringify(columnVisibility),
+      );
+    } catch {
+      /* ignore persistence errors */
+    }
+  }, [columnVisibility]);
 
   const assets = useMemo<RegistryAsset[]>(() => data?.assets ?? [], [data]);
 
-  const { allTags, allTools } = useMemo(() => {
+  const { allOrgs, allTags, allTools } = useMemo(() => {
     const tags = new Set<string>();
     const tools = new Set<string>();
+    const orgs = new Set<string>();
     for (const asset of assets) {
       asset.tags.forEach((t) => tags.add(t));
       const latest = asset.versions[asset.latest];
       latest?.tools.forEach((t) => tools.add(t));
+      if (asset.org) orgs.add(asset.org);
     }
-    return { allTags: [...tags].sort(), allTools: [...tools].sort() };
+    return {
+      allOrgs: [...orgs].sort(),
+      allTags: [...tags].sort(),
+      allTools: [...tools].sort(),
+    };
   }, [assets]);
 
   const rows = useMemo<BrowseRow[]>(() => {
@@ -86,7 +120,7 @@ export function BrowseRoute() {
       if (tagFilter.size > 0 && !asset.tags.some((t) => tagFilter.has(t))) return false;
       const latest = asset.versions[asset.latest];
       if (toolFilter.size > 0 && !(latest?.tools ?? []).some((t) => toolFilter.has(t))) return false;
-      if (orgOnly && !asset.org) return false;
+      if (orgFilter.size > 0 && !(asset.org && orgFilter.has(asset.org))) return false;
       return true;
     });
 
@@ -101,7 +135,7 @@ export function BrowseRoute() {
     }
 
     return ordered.map(toRow);
-  }, [assets, typeFilter, tagFilter, toolFilter, orgOnly, search]);
+  }, [assets, typeFilter, tagFilter, toolFilter, orgFilter, search]);
 
   const columns = useMemo<ColumnDef<BrowseRow>[]>(
     () => [
@@ -112,9 +146,7 @@ export function BrowseRoute() {
       },
       {
         accessorKey: 'type',
-        cell: ({ row }) => (
-          <Badge variant='secondary'>{row.original.type}</Badge>
-        ),
+        cell: ({ row }) => <Badge variant='secondary'>{row.original.type}</Badge>,
         header: 'Type',
       },
       {
@@ -196,34 +228,43 @@ export function BrowseRoute() {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
-    onSortingChange: setSorting,
+    onSortingChange: (updater) => {
+      const next = typeof updater === 'function' ? updater(sorting) : updater;
+      void setFilters({ sort: serializeSort(next) });
+    },
     state: { columnVisibility, sorting },
   });
 
   const navigateToAsset = (row: BrowseRow) =>
     navigate(`/assets/${row.type}/${encodeURIComponent(row.name)}/${row.version}`);
 
-  const toggleInSet = <T,>(set: Set<T>, value: T, setSet: (s: Set<T>) => void) => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    setSet(next);
-  };
+  const setSearch = (value: string) => void setFilters({ q: value });
+  const setTypeFilter = (next: Set<string>) => void setFilters({ types: [...next] });
+  const setTagFilter = (next: Set<string>) => void setFilters({ tags: [...next] });
+  const setToolFilter = (next: Set<string>) => void setFilters({ tools: [...next] });
+  const setOrgFilter = (next: Set<string>) => void setFilters({ orgs: [...next] });
 
   const clearAll = () => {
-    setSearch('');
-    setTypeFilter(new Set());
-    setTagFilter(new Set());
-    setToolFilter(new Set());
-    setOrgOnly(false);
+    void setFilters({ orgs: [], q: '', tags: [], tools: [], types: [] });
   };
 
-  const hasActiveFilters =
-    search.trim() !== '' ||
-    typeFilter.size > 0 ||
-    tagFilter.size > 0 ||
-    toolFilter.size > 0 ||
-    orgOnly;
+  const removeChip = (facet: 'orgs' | 'tags' | 'tools' | 'types', value: string) => {
+    const current = filters[facet];
+    void setFilters({ [facet]: current.filter((v) => v !== value) });
+  };
+
+  const chips = useMemo<Array<{ facet: 'orgs' | 'tags' | 'tools' | 'types'; value: string }>>(() => {
+    const items: Array<{ facet: 'orgs' | 'tags' | 'tools' | 'types'; value: string }> = [];
+    for (const v of filters.types) items.push({ facet: 'types', value: v });
+    for (const v of filters.tags) items.push({ facet: 'tags', value: v });
+    for (const v of filters.tools) items.push({ facet: 'tools', value: v });
+    for (const v of filters.orgs) items.push({ facet: 'orgs', value: v });
+    return items;
+  }, [filters]);
+
+  const hasActiveFilters = chips.length > 0 || search.trim() !== '';
+
+  const columnsControl = <ColumnsPopover columns={ALL_COLUMN_IDS} table={table} />;
 
   return (
     <>
@@ -232,7 +273,7 @@ export function BrowseRoute() {
         title='Browse assets'
       />
 
-      <section aria-label='Asset filters' className='mb-6 flex flex-col gap-4'>
+      <section aria-label='Asset filters' className='mb-6 flex flex-col gap-3'>
         <div className='flex flex-col gap-2 md:flex-row md:items-center'>
           <label className='flex-1' htmlFor='browse-search'>
             <span className='sr-only'>Search assets</span>
@@ -240,82 +281,73 @@ export function BrowseRoute() {
               autoComplete='off'
               id='browse-search'
               onChange={(event) => setSearch(event.target.value)}
-              placeholder='Search assets by name, description, tag, or author…'
+              placeholder='Search assets by name, description, tag, org, or author…'
               type='search'
               value={search}
             />
           </label>
-          <div className='flex items-center gap-2'>
-            <label
-              className='flex cursor-pointer items-center gap-2 text-sm text-foreground'
-              htmlFor='browse-org-toggle'
-            >
-              <Checkbox
-                checked={orgOnly}
-                id='browse-org-toggle'
-                onChange={(event) => setOrgOnly(event.target.checked)}
-              />
-              Org-scoped only
-            </label>
-            {hasActiveFilters ? (
-              <Button onClick={clearAll} size='sm' variant='ghost'>
-                Clear filters
-              </Button>
-            ) : null}
-          </div>
         </div>
 
-        <div className='grid gap-4 md:grid-cols-3'>
-          <FilterGroup
+        <div className='flex flex-wrap items-center gap-2'>
+          <MultiSelectFilter
+            data-testid='filter-types'
             label='Asset type'
-            onToggle={(value) => toggleInSet(typeFilter, value as AssetType, setTypeFilter)}
+            onChange={setTypeFilter}
             options={ASSET_TYPES}
-            selected={typeFilter}
+            selected={typeFilter as Set<string>}
           />
-          <FilterGroup
+          <MultiSelectFilter
+            data-testid='filter-tags'
             emptyLabel='No tags available'
             label='Tags'
-            onToggle={(value) => toggleInSet(tagFilter, value, setTagFilter)}
+            onChange={setTagFilter}
             options={allTags}
             selected={tagFilter}
           />
-          <FilterGroup
+          <MultiSelectFilter
+            data-testid='filter-tools'
             emptyLabel='No tools available'
             label='Tool compatibility'
-            onToggle={(value) => toggleInSet(toolFilter, value, setToolFilter)}
+            onChange={setToolFilter}
             options={allTools}
             selected={toolFilter}
           />
+          <MultiSelectFilter
+            data-testid='filter-orgs'
+            emptyLabel='No orgs available'
+            label='Orgs'
+            onChange={setOrgFilter}
+            options={allOrgs}
+            selected={orgFilter}
+          />
+          {hasActiveFilters ? (
+            <Button
+              className='ml-auto'
+              data-testid='clear-all-filters'
+              onClick={clearAll}
+              size='sm'
+              variant='ghost'
+            >
+              Clear all filters
+            </Button>
+          ) : null}
         </div>
 
-        <fieldset
-          aria-label='Column visibility'
-          className='flex flex-wrap items-center gap-3 rounded-md border border-border p-3'
-        >
-          <legend className='sr-only'>Column visibility</legend>
-          <span className='text-xs font-medium uppercase tracking-wide text-muted-foreground'>
-            Visible columns
-          </span>
-          {ALL_COLUMN_IDS.map((columnId) => {
-            const column = table.getColumn(columnId);
-            if (!column) return null;
-            const checkboxId = `column-toggle-${columnId}`;
-            return (
-              <label
-                className='flex cursor-pointer items-center gap-2 text-sm text-foreground'
-                htmlFor={checkboxId}
-                key={columnId}
-              >
-                <Checkbox
-                  checked={column.getIsVisible()}
-                  id={checkboxId}
-                  onChange={(event) => column.toggleVisibility(event.target.checked)}
-                />
-                {String(column.columnDef.header ?? columnId)}
-              </label>
-            );
-          })}
-        </fieldset>
+        {chips.length > 0 ? (
+          <div
+            aria-label='Active filters'
+            className='flex flex-wrap items-center gap-2'
+            data-testid='active-filter-chips'
+          >
+            {chips.map((chip) => (
+              <FilterChip
+                key={`${chip.facet}:${chip.value}`}
+                label={`${facetChipLabel(chip.facet)}: ${chip.value}`}
+                onRemove={() => removeChip(chip.facet, chip.value)}
+              />
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {isLoading ? (
@@ -340,7 +372,7 @@ export function BrowseRoute() {
         />
       ) : (
         <>
-          <BrowseTable onRowClick={navigateToAsset} table={table} />
+          <BrowseTable columnsControl={columnsControl} onRowClick={navigateToAsset} table={table} />
           <BrowseCardList
             isDownloading={isDownloading}
             onCardClick={navigateToAsset}
@@ -422,9 +454,10 @@ function BrowseCardList({ isDownloading, onCardClick, onDownload, rows }: Browse
   );
 }
 
-function BrowseTable({ onRowClick, table }: BrowseTableProps) {
+function BrowseTable({ columnsControl, onRowClick, table }: BrowseTableProps) {
   return (
     <div className='hidden md:block' data-testid='browse-table-wrapper'>
+      <div className='mb-2 flex justify-end'>{columnsControl}</div>
       <Table aria-label='Registry assets'>
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
@@ -483,6 +516,55 @@ function BrowseTable({ onRowClick, table }: BrowseTableProps) {
   );
 }
 
+function ColumnsPopover({
+  columns,
+  table,
+}: {
+  columns: readonly ColumnId[];
+  table: ReturnType<typeof useReactTable<BrowseRow>>;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger
+        className='inline-flex h-9 items-center gap-2 rounded-md border border-input bg-transparent px-3 text-sm font-medium text-foreground transition-colors hover:border-primary/60 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+        data-testid='columns-popover-trigger'
+      >
+        <Columns3 aria-hidden='true' />
+        <span>Columns</span>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner align='end' sideOffset={6}>
+          <Popover.Popup
+            aria-label='Visible columns'
+            className='z-50 flex w-56 flex-col gap-1 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-md outline-none'
+            role='group'
+          >
+            {columns.map((columnId) => {
+              const column = table.getColumn(columnId);
+              if (!column) return null;
+              const inputId = `column-toggle-${columnId}`;
+              return (
+                <label
+                  className='flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent'
+                  htmlFor={inputId}
+                  key={columnId}
+                >
+                  <Checkbox
+                    checked={column.getIsVisible()}
+                    id={inputId}
+                    onChange={(event) => column.toggleVisibility(event.target.checked)}
+                  />
+                  <span className='capitalize'>{String(column.columnDef.header ?? columnId)}</span>
+                </label>
+              );
+            })}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 function DownloadRowButton({
   isLoading,
   name,
@@ -513,6 +595,63 @@ function DownloadRowButton({
   );
 }
 
+function facetChipLabel(facet: 'orgs' | 'tags' | 'tools' | 'types'): string {
+  switch (facet) {
+    case 'orgs':
+      return 'Org';
+    case 'tags':
+      return 'Tag';
+    case 'tools':
+      return 'Tool';
+    case 'types':
+      return 'Type';
+  }
+}
+
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span
+      className='inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-0.5 text-xs text-foreground'
+      data-testid={`chip-${label}`}
+    >
+      <span>{label}</span>
+      <button
+        aria-label={`Remove ${label}`}
+        className='rounded-full p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        onClick={onRemove}
+        type='button'
+      >
+        <X aria-hidden='true' className='h-3 w-3' />
+      </button>
+    </span>
+  );
+}
+
+function loadColumnVisibility(): VisibilityState {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const result: VisibilityState = {};
+    for (const id of ALL_COLUMN_IDS) {
+      const value = (parsed as Record<string, unknown>)[id];
+      if (typeof value === 'boolean') result[id] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function parseSort(value: string): SortingState {
+  if (!value) return [];
+  const [id, dir] = value.split(':');
+  if (!id || (dir !== 'asc' && dir !== 'desc')) return [];
+  return [{ desc: dir === 'desc', id }];
+}
+
 function rowToAssetRef(row: BrowseRow): { name: string; org?: string; type: AssetType; version: string } {
   return {
     name: row.name,
@@ -520,6 +659,13 @@ function rowToAssetRef(row: BrowseRow): { name: string; org?: string; type: Asse
     type: row.type,
     version: row.version,
   };
+}
+
+function serializeSort(state: SortingState): string {
+  if (!state.length) return '';
+  const [first] = state;
+  if (!first) return '';
+  return `${first.id}:${first.desc ? 'desc' : 'asc'}`;
 }
 
 function toRow(asset: RegistryAsset): BrowseRow {
