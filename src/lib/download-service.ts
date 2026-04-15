@@ -61,7 +61,9 @@ export async function downloadAsset(
   const rootBundle = await fetchAssetBundle(ref, options, visited);
 
   const zip = new JSZip();
-  addBundleToZip(zip, rootBundle);
+  const rootFolder = zip.folder(ref.name);
+  if (!rootFolder) throw new Error(`Failed to create zip folder for ${ref.name}`);
+  addBundleToZip(rootFolder, rootBundle);
 
   for (const [key, bundle] of visited) {
     if (key === refKey(ref)) continue;
@@ -133,9 +135,7 @@ export async function downloadBundle(
 
 function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle): void {
   for (const [path, bytes] of bundle.files) {
-    // Flat layout: strip any nested directories so dependencies sit flat inside their folder
-    const flatName = path.includes('/') ? path.split('/').pop()! : path;
-    zip.file(flatName, bytes);
+    zip.file(path, bytes);
   }
 }
 

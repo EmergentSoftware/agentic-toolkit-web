@@ -81,7 +81,7 @@ describe('downloadAsset', () => {
     vi.restoreAllMocks();
   });
 
-  it('packages a single asset with a flat layout and preserves manifest bytes', async () => {
+  it('packages a single asset inside a {name}/ folder and preserves manifest bytes', async () => {
     const manifest: Manifest = {
       author: 'EmergentSoftware',
       description: 'validate',
@@ -112,11 +112,60 @@ describe('downloadAsset', () => {
 
     expect(result.filename).toBe('validate-1.1.0.zip');
     const entries = await readZipEntries(result.blob);
-    expect(Object.keys(entries).sort()).toEqual(['AGENT.md', 'README.md', 'manifest.json']);
-    expect(entries['manifest.json']).toBe(buildManifestBytes(manifest));
-    expect(entries['AGENT.md']).toBe(agent);
-    expect(entries['README.md']).toBe(readme);
+    expect(Object.keys(entries).sort()).toEqual([
+      'validate/AGENT.md',
+      'validate/README.md',
+      'validate/manifest.json',
+    ]);
+    expect(entries['validate/manifest.json']).toBe(buildManifestBytes(manifest));
+    expect(entries['validate/AGENT.md']).toBe(agent);
+    expect(entries['validate/README.md']).toBe(readme);
     expect(trigger).toHaveBeenCalledWith(result.blob, 'validate-1.1.0.zip');
+  });
+
+  it('preserves nested subdirectories declared in manifest.files', async () => {
+    const manifest: Manifest = {
+      author: 'EmergentSoftware',
+      description: 'skill with refs',
+      entrypoint: 'SKILL.md',
+      files: [
+        'SKILL.md',
+        'references/data-conventions.md',
+        'references/naming-conventions.md',
+      ],
+      name: 'transactional-sql',
+      type: 'skill',
+      version: '1.0.2',
+    };
+
+    const fetchMock = setupFetchForAssets([
+      {
+        files: {
+          'README.md': '# readme',
+          'references/data-conventions.md': 'data conv',
+          'references/naming-conventions.md': 'naming conv',
+          'SKILL.md': '# skill',
+        },
+        manifest,
+      },
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { blob } = await downloadAsset(
+      { name: 'transactional-sql', type: 'skill', version: '1.0.2' },
+      { retry: fastRetry, triggerDownload: vi.fn() },
+    );
+
+    const entries = await readZipEntries(blob);
+    expect(Object.keys(entries).sort()).toEqual([
+      'transactional-sql/README.md',
+      'transactional-sql/SKILL.md',
+      'transactional-sql/manifest.json',
+      'transactional-sql/references/data-conventions.md',
+      'transactional-sql/references/naming-conventions.md',
+    ]);
+    expect(entries['transactional-sql/references/data-conventions.md']).toBe('data conv');
+    expect(entries['transactional-sql/references/naming-conventions.md']).toBe('naming conv');
   });
 
   it('tolerates a missing README (HTTP 404) on the primary asset', async () => {
@@ -140,7 +189,7 @@ describe('downloadAsset', () => {
     );
 
     const entries = await readZipEntries(blob);
-    expect(Object.keys(entries).sort()).toEqual(['SKILL.md', 'manifest.json']);
+    expect(Object.keys(entries).sort()).toEqual(['no-readme/SKILL.md', 'no-readme/manifest.json']);
   });
 
   it('places each dependency under dependencies/{name}/ with its own files', async () => {
@@ -175,15 +224,15 @@ describe('downloadAsset', () => {
 
     const entries = await readZipEntries(blob);
     expect(Object.keys(entries).sort()).toEqual([
-      'AGENT.md',
-      'README.md',
       'dependencies/dev-commands-rule/README.md',
       'dependencies/dev-commands-rule/RULE.md',
       'dependencies/dev-commands-rule/manifest.json',
-      'manifest.json',
+      'validate/AGENT.md',
+      'validate/README.md',
+      'validate/manifest.json',
     ]);
     expect(entries['dependencies/dev-commands-rule/manifest.json']).toBe(buildManifestBytes(dep));
-    expect(entries['manifest.json']).toBe(buildManifestBytes(primary));
+    expect(entries['validate/manifest.json']).toBe(buildManifestBytes(primary));
   });
 
   it('deduplicates dependencies encountered via multiple paths and guards against cycles', async () => {
@@ -217,8 +266,8 @@ describe('downloadAsset', () => {
     );
 
     const entries = await readZipEntries(blob);
-    // Cycle should resolve: primary a at root, b under dependencies/
-    expect(Object.keys(entries)).toContain('A.md');
+    // Cycle should resolve: primary a under a/, b under dependencies/b/
+    expect(Object.keys(entries)).toContain('a/A.md');
     expect(Object.keys(entries)).toContain('dependencies/b/B.md');
     expect(Object.keys(entries)).toContain('dependencies/b/manifest.json');
     // a should not recurse into itself as a dep
@@ -259,7 +308,7 @@ describe('downloadAsset', () => {
     );
     expect(manifestCalls).toBeGreaterThanOrEqual(2);
     const entries = await readZipEntries(blob);
-    expect(entries['SKILL.md']).toBe('body');
+    expect(entries['flaky/SKILL.md']).toBe('body');
   });
 
   it('surfaces a typed error when a required file is missing', async () => {
