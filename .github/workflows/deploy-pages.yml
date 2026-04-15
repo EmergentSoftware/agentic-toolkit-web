@@ -15,7 +15,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Lint, Typecheck & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint web
+        run: pnpm lint
+
+      - name: Type check web
+        run: pnpm typecheck
+
+      - name: Test web
+        run: pnpm test
+
+      - name: Install auth-function dependencies
+        working-directory: auth-function
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint auth-function
+        working-directory: auth-function
+        run: pnpm lint
+
+      - name: Type check auth-function
+        working-directory: auth-function
+        run: pnpm typecheck
+
+      - name: Test auth-function
+        working-directory: auth-function
+        run: pnpm test
+
   build:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

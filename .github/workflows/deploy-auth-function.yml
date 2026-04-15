@@ -1,0 +1,97 @@
+name: Deploy Auth Function
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'auth-function/**'
+      - '.github/workflows/deploy-auth-function.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-auth-function
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, Validate & Deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: auth-function-prod
+    defaults:
+      run:
+        working-directory: auth-function
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: auth-function/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Prune to production dependencies
+        run: pnpm prune --prod
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ vars.AZURE_FUNCTION_APP_NAME }}
+          package: auth-function
+
+      - name: Smoke test /api/health
+        working-directory: .
+        env:
+          FUNCTION_APP_NAME: ${{ vars.AZURE_FUNCTION_APP_NAME }}
+        run: |
+          set -euo pipefail
+          HEALTH_URL="https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health"
+          echo "Probing ${HEALTH_URL}"
+          for attempt in 1 2 3 4 5 6; do
+            status=$(curl -sS -o response.json -w '%{http_code}' --max-time 15 "${HEALTH_URL}" || echo "000")
+            if [ "${status}" = "200" ]; then
+              echo "Health check passed (attempt ${attempt})"
+              cat response.json
+              echo
+              exit 0
+            fi
+            echo "Attempt ${attempt} returned status ${status}; retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 6 attempts."
+          cat response.json || true
+          exit 1
+
+      - name: Azure logout
+        if: always()
+        run: az logout
+        working-directory: .
