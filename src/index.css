@@ -29,6 +29,18 @@
   --warning-foreground: #0B1A29;
   --info: #0072DA;
   --info-foreground: #FFFFFF;
+  --type-skill: #0072DA;
+  --type-skill-foreground: #FFFFFF;
+  --type-agent: #7A2EC7;
+  --type-agent-foreground: #FFFFFF;
+  --type-rule: #B84A00;
+  --type-rule-foreground: #FFFFFF;
+  --type-hook: #0F7A66;
+  --type-hook-foreground: #FFFFFF;
+  --type-memory: #C0337A;
+  --type-memory-foreground: #FFFFFF;
+  --type-mcp: #2F4F7F;
+  --type-mcp-foreground: #FFFFFF;
   --radius: 0.75rem;
 }
 
@@ -58,6 +70,18 @@
   --warning-foreground: #0B1A29;
   --info: #0072DA;
   --info-foreground: #FFFFFF;
+  --type-skill: #4FA4FF;
+  --type-skill-foreground: #061726;
+  --type-agent: #B98BF0;
+  --type-agent-foreground: #120823;
+  --type-rule: #F08A4B;
+  --type-rule-foreground: #1F0E04;
+  --type-hook: #3ED0AE;
+  --type-hook-foreground: #04201A;
+  --type-memory: #F06FAE;
+  --type-memory-foreground: #240516;
+  --type-mcp: #8CA7CE;
+  --type-mcp-foreground: #080E19;
 }
 
 @theme inline {
@@ -86,6 +110,18 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-type-skill: var(--type-skill);
+  --color-type-skill-foreground: var(--type-skill-foreground);
+  --color-type-agent: var(--type-agent);
+  --color-type-agent-foreground: var(--type-agent-foreground);
+  --color-type-rule: var(--type-rule);
+  --color-type-rule-foreground: var(--type-rule-foreground);
+  --color-type-hook: var(--type-hook);
+  --color-type-hook-foreground: var(--type-hook-foreground);
+  --color-type-memory: var(--type-memory);
+  --color-type-memory-foreground: var(--type-memory-foreground);
+  --color-type-mcp: var(--type-mcp);
+  --color-type-mcp-foreground: var(--type-mcp-foreground);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

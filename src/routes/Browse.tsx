@@ -8,7 +8,7 @@ import {
   useReactTable,
   type VisibilityState,
 } from '@tanstack/react-table';
-import { Columns3, X } from 'lucide-react';
+import { Building2, Columns3, Hash, Wrench, X } from 'lucide-react';
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
@@ -17,15 +17,17 @@ import type { AssetType } from '@/lib/schemas/manifest';
 import type { RegistryAsset } from '@/lib/schemas/registry';
 
 import { EmptyState } from '@/components/EmptyState';
+import { useFullWidthLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MultiSelectFilter } from '@/components/MultiSelectFilter';
 import { PageHeader } from '@/components/PageHeader';
-import { Badge } from '@/components/ui/badge';
+import { assetTypeBadgeVariant, Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useDownloadAsset } from '@/hooks/useDownloadAsset';
 import { useRegistry } from '@/hooks/useRegistry';
 import { rankAssetNames } from '@/lib/search';
@@ -63,6 +65,7 @@ interface BrowseTableProps {
 }
 
 export function BrowseRoute() {
+  useFullWidthLayout();
   const { data, error, isError, isLoading } = useRegistry();
   const navigate = useNavigate();
   const { download, isDownloading } = useDownloadAsset();
@@ -157,13 +160,17 @@ export function BrowseRoute() {
       },
       {
         accessorKey: 'type',
-        cell: ({ row }) => <Badge variant='secondary'>{row.original.type}</Badge>,
+        cell: ({ row }) => (
+          <Badge variant={assetTypeBadgeVariant(row.original.type)}>{row.original.type}</Badge>
+        ),
         header: 'Type',
       },
       {
         accessorKey: 'description',
         cell: ({ row }) => (
-          <span className='line-clamp-2 text-muted-foreground'>{row.original.description}</span>
+          <Tooltip content={row.original.description} maxWidth='28rem'>
+            <span className='line-clamp-2 text-muted-foreground'>{row.original.description}</span>
+          </Tooltip>
         ),
         header: 'Description',
       },
@@ -177,7 +184,8 @@ export function BrowseRoute() {
         cell: ({ row }) => (
           <div className='flex flex-wrap gap-1'>
             {row.original.tags.map((tag) => (
-              <Badge key={tag} variant='outline'>
+              <Badge key={tag} shape='pill' variant='tag'>
+                <Hash aria-hidden='true' className='h-3 w-3 opacity-70' />
                 {tag}
               </Badge>
             ))}
@@ -191,7 +199,8 @@ export function BrowseRoute() {
         cell: ({ row }) => (
           <div className='flex flex-wrap gap-1'>
             {row.original.tools.map((tool) => (
-              <Badge key={tool} variant='outline'>
+              <Badge key={tool} variant='tool'>
+                <Wrench aria-hidden='true' className='h-3 w-3 opacity-70' />
                 {tool}
               </Badge>
             ))}
@@ -204,7 +213,10 @@ export function BrowseRoute() {
         accessorKey: 'org',
         cell: ({ row }) =>
           row.original.org ? (
-            <Badge variant='secondary'>{row.original.org}</Badge>
+            <Badge variant='org'>
+              <Building2 aria-hidden='true' className='h-3 w-3 opacity-80' />
+              {row.original.org}
+            </Badge>
           ) : (
             <span className='text-xs text-muted-foreground'>global</span>
           ),
@@ -435,20 +447,30 @@ function BrowseCardList({ isDownloading, onCardClick, onDownload, rows }: Browse
             <CardHeader>
               <div className='flex items-start justify-between gap-2'>
                 <CardTitle>{row.name}</CardTitle>
-                <Badge variant='secondary'>{row.type}</Badge>
+                <Badge variant={assetTypeBadgeVariant(row.type)}>{row.type}</Badge>
               </div>
-              <CardDescription>{row.description}</CardDescription>
+              <Tooltip content={row.description} maxWidth='22rem'>
+                <CardDescription className='line-clamp-2'>{row.description}</CardDescription>
+              </Tooltip>
             </CardHeader>
             <CardContent className='flex flex-col gap-3 text-sm'>
-              <div className='flex items-center gap-2 text-muted-foreground'>
+              <div className='flex flex-wrap items-center gap-2 text-muted-foreground'>
                 <span>v{row.version}</span>
                 <span aria-hidden='true'>·</span>
-                <span>{row.org || 'global'}</span>
+                {row.org ? (
+                  <Badge variant='org'>
+                    <Building2 aria-hidden='true' className='h-3 w-3 opacity-80' />
+                    {row.org}
+                  </Badge>
+                ) : (
+                  <span>global</span>
+                )}
               </div>
               {row.tags.length > 0 ? (
                 <div className='flex flex-wrap gap-1'>
                   {row.tags.map((tag) => (
-                    <Badge key={tag} variant='outline'>
+                    <Badge key={tag} shape='pill' variant='tag'>
+                      <Hash aria-hidden='true' className='h-3 w-3 opacity-70' />
                       {tag}
                     </Badge>
                   ))}
@@ -457,7 +479,8 @@ function BrowseCardList({ isDownloading, onCardClick, onDownload, rows }: Browse
               {row.tools.length > 0 ? (
                 <div className='flex flex-wrap gap-1'>
                   {row.tools.map((tool) => (
-                    <Badge key={tool} variant='outline'>
+                    <Badge key={tool} variant='tool'>
+                      <Wrench aria-hidden='true' className='h-3 w-3 opacity-70' />
                       {tool}
                     </Badge>
                   ))}
