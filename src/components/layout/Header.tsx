@@ -1,6 +1,6 @@
-import { Package } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router';
 
+import { useTheme } from '@/components/theme/ThemeProvider';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/hooks/useSession';
@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
 export function Header() {
   const { signIn, signOut, status, user } = useSession();
   const navigate = useNavigate();
+  const { resolvedTheme } = useTheme();
 
   const handleSignOut = () => {
     signOut();
@@ -31,15 +32,27 @@ export function Header() {
   const showSignOut = status === 'member' || status === 'non-member' || status === 'verifying';
   const showSignIn = status === 'signed-out';
 
+  const wordmark = resolvedTheme === 'dark' ? '/logo-white-text.svg' : '/logo-dark-text.svg';
+
   return (
     <header
-      className='sticky top-0 z-40 flex h-14 w-full items-center border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80'
+      className='sticky top-0 z-40 flex h-16 w-full items-center border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80'
       data-testid='app-header'
     >
       <div className='mx-auto flex w-full max-w-6xl items-center gap-6 px-4 sm:px-6'>
-        <NavLink className='flex items-center gap-2 font-semibold tracking-tight text-foreground' end to='/'>
-          <Package aria-hidden='true' className='size-5 text-primary' />
-          <span>Agentic Toolkit</span>
+        <NavLink
+          aria-label='Agentic Toolkit home'
+          className='flex items-center gap-2 tracking-tight text-foreground'
+          end
+          to='/'
+        >
+          <img
+            alt=''
+            aria-hidden='true'
+            className='h-8 w-8 shrink-0'
+            src='/logomark.svg'
+          />
+          <img alt='Agentic Toolkit' className='h-5 w-auto' src={wordmark} />
         </NavLink>
 
         <nav aria-label='Primary' className='flex flex-1 items-center gap-1'>

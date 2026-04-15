@@ -1,50 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 @import 'tailwindcss';
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
+  --background: #EBF0F5;
+  --foreground: #0B1A29;
+  --card: #FFFFFF;
+  --card-foreground: #0B1A29;
+  --popover: #FFFFFF;
+  --popover-foreground: #0B1A29;
+  --primary: #ED352F;
+  --primary-foreground: #FFFFFF;
+  --secondary: #D8E1EB;
+  --secondary-foreground: #0B1A29;
+  --muted: #D8E1EB;
+  --muted-foreground: #223648;
+  --accent: #D8E1EB;
+  --accent-foreground: #0B1A29;
+  --destructive: #ED352F;
+  --destructive-foreground: #FFFFFF;
+  --border: #D8E1EB;
+  --input: #D8E1EB;
+  --ring: #ED352F;
+  --success: #37B84D;
+  --success-foreground: #FFFFFF;
+  --warning: #F9B700;
+  --warning-foreground: #0B1A29;
+  --info: #0072DA;
+  --info-foreground: #FFFFFF;
+  --radius: 0.75rem;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: #000C1A;
+  --foreground: rgba(255, 255, 255, 1);
+  --card: #0B1A29;
+  --card-foreground: rgba(255, 255, 255, 1);
+  --popover: #0B1A29;
+  --popover-foreground: rgba(255, 255, 255, 1);
+  --primary: #ED352F;
+  --primary-foreground: #FFFFFF;
+  --secondary: #223648;
+  --secondary-foreground: rgba(255, 255, 255, 0.75);
+  --muted: #223648;
+  --muted-foreground: rgba(255, 255, 255, 0.75);
+  --accent: #223648;
+  --accent-foreground: rgba(255, 255, 255, 1);
+  --destructive: #ED352F;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #ED352F;
+  --success: #37B84D;
+  --success-foreground: #FFFFFF;
+  --warning: #F9B700;
+  --warning-foreground: #0B1A29;
+  --info: #0072DA;
+  --info-foreground: #FFFFFF;
 }
 
 @theme inline {
@@ -67,6 +80,12 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -82,6 +101,28 @@ body,
 body {
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family:
+    'Roboto',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
   margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
 }

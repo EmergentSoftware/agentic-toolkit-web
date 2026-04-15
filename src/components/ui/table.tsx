@@ -7,7 +7,7 @@ export const Table = forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTML
   ref,
 ) {
   return (
-    <div className='relative w-full overflow-auto rounded-xl border border-border'>
+    <div className='relative w-full overflow-auto rounded-xl border border-border bg-card'>
       <table className={cn('w-full caption-bottom text-sm', className)} ref={ref} {...props} />
     </div>
   );
@@ -15,7 +15,13 @@ export const Table = forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTML
 
 export const TableHeader = forwardRef<HTMLTableSectionElement, React.HTMLAttributes<HTMLTableSectionElement>>(
   function TableHeader({ className, ...props }, ref) {
-    return <thead className={cn('[&_tr]:border-b [&_tr]:border-border', className)} ref={ref} {...props} />;
+    return (
+      <thead
+        className={cn('bg-muted/40 [&_tr]:border-b [&_tr]:border-border', className)}
+        ref={ref}
+        {...props}
+      />
+    );
   },
 );
 
@@ -32,7 +38,7 @@ export const TableRow = forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTM
   return (
     <tr
       className={cn(
-        'border-b border-border transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted',
+        'border-b border-border transition-colors hover:bg-muted/30 data-[state=selected]:bg-muted',
         className,
       )}
       ref={ref}
@@ -46,7 +52,7 @@ export const TableHead = forwardRef<HTMLTableCellElement, React.ThHTMLAttributes
     return (
       <th
         className={cn(
-          'h-10 px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-muted-foreground',
+          'h-10 px-3 text-left align-middle text-xs font-semibold uppercase tracking-wider text-muted-foreground',
           className,
         )}
         ref={ref}

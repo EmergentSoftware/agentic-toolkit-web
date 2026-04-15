@@ -1,5 +1,3 @@
-import { Package } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/hooks/useSession';
 import { consumePendingReturnPath } from '@/lib/session';
@@ -11,20 +9,18 @@ export function SignedOutLanding() {
   return (
     <section
       aria-label='Sign in to Agentic Toolkit'
-      className='mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center'
+      className='mx-auto flex max-w-2xl flex-col items-center gap-6 py-16 text-center'
       data-testid='signed-out-landing'
     >
-      <Package aria-hidden='true' className='size-10 text-primary' />
+      <img alt='' aria-hidden='true' className='h-16 w-16' src='/logomark.svg' />
       <div className='flex flex-col gap-3'>
-        <h1 className='text-3xl font-semibold tracking-tight text-foreground'>
-          Agentic Toolkit
-        </h1>
+        <h1 className='text-4xl font-semibold tracking-tight text-foreground'>Agentic Toolkit</h1>
         <p className='text-base text-muted-foreground'>
           A curated registry of skills, agents, rules, hooks, and bundles for AI coding tools.
           Sign in with your GitHub account to browse and download assets.
         </p>
         <p className='text-sm text-muted-foreground'>
-          Access is limited to members of the <strong>EmergentSoftware</strong> organization.
+          Access is limited to members of the <strong className='text-foreground'>EmergentSoftware</strong> organization.
         </p>
       </div>
       <Button
