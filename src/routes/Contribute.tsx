@@ -442,7 +442,30 @@ async function readFileList(fileList: FileList): Promise<FileEntry[]> {
     const content = await file.text();
     entries.push({ content, path, size: file.size });
   }
-  return entries;
+  return stripCommonRoot(entries);
+}
+
+/**
+ * Normalize uploaded file paths by stripping a single common leading directory
+ * shared by every entry. Browser folder uploads (`webkitRelativePath` or
+ * drag-and-drop of a directory) prefix each file with the selected folder's
+ * name, which otherwise double-nests the asset under its registry path and
+ * causes the manifest entrypoint/files fields to reference paths that don't
+ * exist in the committed tree. Flat drops and divergent roots are left
+ * untouched.
+ */
+function stripCommonRoot(files: FileEntry[]): FileEntry[] {
+  if (files.length === 0) return files;
+  const heads = files.map((f) => {
+    const i = f.path.indexOf('/');
+    return i === -1 ? null : f.path.slice(0, i);
+  });
+  const root = heads[0];
+  if (root === null || heads.some((h) => h !== root)) return files;
+  const prefix = `${root}/`;
+  return files
+    .map((f) => ({ ...f, path: f.path.slice(prefix.length) }))
+    .filter((f) => f.path.length > 0);
 }
 
 function StepFiles({ draft, onChange }: StepProps) {
