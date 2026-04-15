@@ -3,7 +3,6 @@ import { Outlet } from 'react-router';
 import { Toaster } from '@/components/Toaster';
 import { cn } from '@/lib/utils';
 
-import { Footer } from './Footer';
 import { Header } from './Header';
 import { LayoutWidthProvider, useLayoutWidth } from './LayoutWidthContext';
 
@@ -29,7 +28,6 @@ function AppLayoutInner() {
       >
         <Outlet />
       </main>
-      <Footer />
       <Toaster />
     </div>
   );
