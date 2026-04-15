@@ -1,12 +1,12 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Manifest } from '@/lib/schemas';
+import type { Manifest, Registry } from '@/lib/schemas';
 
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { AssetDetailRoute } from '@/routes/AssetDetail';
@@ -16,13 +16,48 @@ const useAssetReadmeMock = vi.hoisted(() => vi.fn());
 const useDownloadAssetMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
 );
+const useRegistryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/useAssetManifest', () => ({ useAssetManifest: useAssetManifestMock }));
 vi.mock('@/hooks/useAssetReadme', () => ({ useAssetReadme: useAssetReadmeMock }));
 vi.mock('@/hooks/useDownloadAsset', () => ({ useDownloadAsset: useDownloadAssetMock }));
+vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 
 type ManifestQueryShape = Partial<UseQueryResult<Manifest, Error>>;
 type ReadmeQueryShape = Partial<UseQueryResult<null | string, Error>>;
+type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;
+
+function buildRegistryWith(asset: { latest: string; name: string; org?: string; type: Manifest['type']; versions: string[] }): Registry {
+  const versions: Registry['assets'][number]['versions'] = {};
+  for (const v of asset.versions) {
+    versions[v] = {
+      author: 'x',
+      checksum: 'sha256-x',
+      description: 'x',
+      tools: [],
+    };
+  }
+  return {
+    assets: [
+      {
+        latest: asset.latest,
+        name: asset.name,
+        org: asset.org,
+        tags: [],
+        type: asset.type,
+        versions,
+      },
+    ],
+    version: '2026-01-01T00:00:00Z',
+  };
+}
+
+function LocationProbe() {
+  const loc = useLocation();
+  return (
+    <div data-pathname={loc.pathname} data-search={loc.search} data-testid='location-probe' />
+  );
+}
 
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -30,6 +65,7 @@ function renderAt(path: string) {
     return (
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={[path]}>
+          <LocationProbe />
           <Routes>
             <Route element={children} path='assets/:type/:name/:version' />
             <Route element={<div data-testid='home'>HOME</div>} path='/' />
@@ -59,6 +95,17 @@ function setReadme(state: ReadmeQueryShape) {
     isError: false,
     isLoading: false,
     isSuccess: true,
+    ...state,
+  });
+}
+
+function setRegistry(state: RegistryQueryShape) {
+  useRegistryMock.mockReturnValue({
+    data: undefined,
+    error: null,
+    isError: false,
+    isLoading: false,
+    isSuccess: false,
     ...state,
   });
 }
@@ -118,9 +165,14 @@ See [docs](https://example.com).
 `;
 
 describe('AssetDetailRoute', () => {
+  beforeEach(() => {
+    setRegistry({ data: undefined });
+  });
+
   afterEach(() => {
     useAssetManifestMock.mockReset();
     useAssetReadmeMock.mockReset();
+    useRegistryMock.mockReset();
   });
 
   it('renders every field of a fully populated manifest', () => {
@@ -209,5 +261,87 @@ describe('AssetDetailRoute', () => {
     renderAt('/assets/agent/validate/1.1.0');
 
     expect(screen.getByRole('status', { name: /loading asset manifest/i })).toBeInTheDocument();
+  });
+
+  describe('version selector', () => {
+    const REGISTRY = buildRegistryWith({
+      latest: '1.1.0',
+      name: 'validate',
+      org: 'agentic-toolkit',
+      type: 'agent',
+      versions: ['1.0.0', '1.1.0', '0.9.0', '1.0.1'],
+    });
+
+    it('lists all versions sorted semver-descending with a latest badge on asset.latest', () => {
+      setManifest({ data: FULL_MANIFEST, isSuccess: true });
+      setReadme({ data: null, isSuccess: true });
+      setRegistry({ data: REGISTRY, isSuccess: true });
+
+      renderAt('/assets/agent/validate/1.1.0?org=agentic-toolkit');
+
+      fireEvent.click(screen.getByTestId('asset-detail-version-selector'));
+
+      const listbox = screen.getByRole('listbox', { name: /versions/i });
+      const options = within(listbox).getAllByRole('option');
+      expect(options.map((o) => o.textContent?.replace(/latest/, '').trim())).toEqual([
+        'v1.1.0',
+        'v1.0.1',
+        'v1.0.0',
+        'v0.9.0',
+      ]);
+      expect(within(listbox).getByTestId('version-option-1.1.0-latest-badge')).toHaveTextContent('latest');
+      expect(within(listbox).queryByTestId('version-option-1.0.0-latest-badge')).not.toBeInTheDocument();
+      expect(within(listbox).queryByTestId('version-option-0.9.0-latest-badge')).not.toBeInTheDocument();
+    });
+
+    it('navigates to the chosen version while preserving the org query param', () => {
+      setManifest({ data: FULL_MANIFEST, isSuccess: true });
+      setReadme({ data: null, isSuccess: true });
+      setRegistry({ data: REGISTRY, isSuccess: true });
+
+      renderAt('/assets/agent/validate/1.1.0?org=agentic-toolkit');
+
+      fireEvent.click(screen.getByTestId('asset-detail-version-selector'));
+      fireEvent.click(screen.getByTestId('version-option-1.0.0'));
+
+      const probe = screen.getByTestId('location-probe');
+      expect(probe.getAttribute('data-pathname')).toBe('/assets/agent/validate/1.0.0');
+      expect(probe.getAttribute('data-search')).toBe('?org=agentic-toolkit');
+    });
+
+    it('rekeys manifest/readme/download against the newly selected version after navigation', () => {
+      const download = vi.fn().mockResolvedValue(undefined);
+      useDownloadAssetMock.mockReturnValue({ download, isDownloading: () => false });
+
+      const V100_MANIFEST: Manifest = { ...FULL_MANIFEST, version: '1.0.0' };
+      useAssetManifestMock.mockImplementation((ref: { version?: string }) => ({
+        data: ref.version === '1.0.0' ? V100_MANIFEST : FULL_MANIFEST,
+        error: null,
+        isError: false,
+        isLoading: false,
+        isSuccess: true,
+      }));
+      useAssetReadmeMock.mockImplementation((ref: { version?: string }) => ({
+        data: ref.version === '1.0.0' ? '# old readme' : '# new readme',
+        error: null,
+        isError: false,
+        isLoading: false,
+        isSuccess: true,
+      }));
+      setRegistry({ data: REGISTRY, isSuccess: true });
+
+      renderAt('/assets/agent/validate/1.1.0?org=agentic-toolkit');
+
+      expect(within(screen.getByTestId('asset-detail-readme')).getByText(/new readme/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('asset-detail-version-selector'));
+      fireEvent.click(screen.getByTestId('version-option-1.0.0'));
+
+      expect(within(screen.getByTestId('asset-detail-readme')).getByText(/old readme/)).toBeInTheDocument();
+      expect(screen.getByTestId('asset-detail-version-selector')).toHaveTextContent('v1.0.0');
+
+      fireEvent.click(screen.getByRole('button', { name: /download validate/i }));
+      expect(download).toHaveBeenCalledWith(expect.objectContaining({ name: 'validate', version: '1.0.0' }));
+    });
   });
 });

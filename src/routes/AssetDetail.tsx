@@ -1,6 +1,10 @@
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Popover } from '@base-ui-components/react/popover';
+import { ChevronDown } from 'lucide-react';
+import { useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { rcompare as semverRcompare } from 'semver';
 
-import type { AssetType, Manifest } from '@/lib/schemas';
+import type { AssetType, Manifest, RegistryAsset } from '@/lib/schemas';
 
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
@@ -12,13 +16,23 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAssetManifest } from '@/hooks/useAssetManifest';
 import { useAssetReadme } from '@/hooks/useAssetReadme';
 import { useDownloadAsset } from '@/hooks/useDownloadAsset';
+import { useRegistry } from '@/hooks/useRegistry';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
+import { cn } from '@/lib/utils';
 
 const ASSET_TYPES = new Set<AssetType>(['agent', 'hook', 'mcp-config', 'memory-template', 'rule', 'skill']);
+
+interface VersionSelectorProps {
+  currentVersion: string;
+  latestVersion: string;
+  onSelect: (version: string) => void;
+  versions: string[];
+}
 
 export function AssetDetailRoute() {
   const { name, type, version } = useParams<{ name: string; type: string; version: string }>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const org = searchParams.get('org') ?? undefined;
 
   const assetType = type && ASSET_TYPES.has(type as AssetType) ? (type as AssetType) : undefined;
@@ -26,7 +40,19 @@ export function AssetDetailRoute() {
 
   const manifestQuery = useAssetManifest(ref);
   const readmeQuery = useAssetReadme(ref);
+  const registryQuery = useRegistry();
   const { download, isDownloading } = useDownloadAsset();
+
+  const registryAsset = findRegistryAsset(registryQuery.data?.assets, assetType, name, org);
+
+  const handleVersionChange = (nextVersion: string) => {
+    if (!assetType || !name || nextVersion === version) return;
+    const search = searchParams.toString();
+    navigate({
+      pathname: `/assets/${assetType}/${name}/${nextVersion}`,
+      search: search ? `?${search}` : '',
+    });
+  };
 
   if (!assetType || !name || !version) {
     return (
@@ -99,7 +125,16 @@ export function AssetDetailRoute() {
         description={
           <span className='flex flex-wrap items-center gap-2 text-muted-foreground'>
             <Badge variant='secondary'>{manifest.type}</Badge>
-            <span>v{manifest.version}</span>
+            {registryAsset && Object.keys(registryAsset.versions).length > 0 ? (
+              <VersionSelector
+                currentVersion={manifest.version}
+                latestVersion={registryAsset.latest}
+                onSelect={handleVersionChange}
+                versions={Object.keys(registryAsset.versions)}
+              />
+            ) : (
+              <span>v{manifest.version}</span>
+            )}
           </span>
         }
         title={manifest.name}
@@ -239,6 +274,16 @@ function DownloadButton({
   );
 }
 
+function findRegistryAsset(
+  assets: RegistryAsset[] | undefined,
+  type: AssetType | undefined,
+  name: string | undefined,
+  org: string | undefined,
+): RegistryAsset | undefined {
+  if (!assets || !type || !name) return undefined;
+  return assets.find((a) => a.type === type && a.name === name && (a.org ?? undefined) === org);
+}
+
 function MetadataRow({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <div className='flex flex-col gap-1'>
@@ -292,6 +337,73 @@ function SecurityBlockView({ security }: { security: NonNullable<Manifest['secur
         <p className='text-xs text-muted-foreground'>Reviewed on {security.reviewedAt}</p>
       ) : null}
     </div>
+  );
+}
+
+function sortVersionsDesc(versions: string[]): string[] {
+  return [...versions].sort(semverRcompare);
+}
+
+function VersionSelector({ currentVersion, latestVersion, onSelect, versions }: VersionSelectorProps) {
+  const [open, setOpen] = useState(false);
+  const sorted = sortVersionsDesc(versions);
+
+  const select = (v: string) => {
+    setOpen(false);
+    onSelect(v);
+  };
+
+  return (
+    <Popover.Root onOpenChange={setOpen} open={open}>
+      <Popover.Trigger
+        aria-label='Select version'
+        className='inline-flex h-7 items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 text-xs font-medium text-foreground transition-colors hover:border-primary/60 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+        data-testid='asset-detail-version-selector'
+      >
+        <span>v{currentVersion}</span>
+        {currentVersion === latestVersion ? (
+          <Badge data-testid='version-current-latest-badge' variant='success'>
+            latest
+          </Badge>
+        ) : null}
+        <ChevronDown aria-hidden='true' className='h-3.5 w-3.5 opacity-60' />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner align='start' sideOffset={6}>
+          <Popover.Popup
+            aria-label='Versions'
+            className='z-50 flex max-h-64 w-44 flex-col overflow-y-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none'
+            role='listbox'
+          >
+            {sorted.map((v) => {
+              const isSelected = v === currentVersion;
+              const isLatest = v === latestVersion;
+              return (
+                <button
+                  aria-selected={isSelected}
+                  className={cn(
+                    'flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    isSelected && 'bg-accent',
+                  )}
+                  data-testid={`version-option-${v}`}
+                  key={v}
+                  onClick={() => select(v)}
+                  role='option'
+                  type='button'
+                >
+                  <span className='font-medium'>v{v}</span>
+                  {isLatest ? (
+                    <Badge data-testid={`version-option-${v}-latest-badge`} variant='success'>
+                      latest
+                    </Badge>
+                  ) : null}
+                </button>
+              );
+            })}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
