@@ -56,23 +56,6 @@ export class PublishBranchCollisionError extends PublishError {
   }
 }
 
-/** The registry default branch changed mid-flight (fork sync raced with an upstream update). */
-export class PublishDefaultBranchChangedError extends PublishError {
-  readonly expected: string;
-  readonly found: string;
-
-  constructor(params: { cause?: unknown; expected: string; found: string }) {
-    super(
-      `Registry default branch changed: expected ${params.expected}, found ${params.found}`,
-      'The registry repository changed while we were preparing your contribution. Please refresh the page and try again.',
-      { cause: params.cause },
-    );
-    this.name = 'PublishDefaultBranchChangedError';
-    this.expected = params.expected;
-    this.found = params.found;
-  }
-}
-
 /** Transport-layer / network failure talking to GitHub. */
 export class PublishNetworkError extends PublishError {
   readonly status?: number;

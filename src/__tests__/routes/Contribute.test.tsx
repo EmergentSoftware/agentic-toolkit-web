@@ -318,7 +318,6 @@ describe('Contribute — wizard UI', () => {
       }),
       octokit: fakeOctokit,
       readme: '# Hello',
-      user: { login: 'octo-login' },
     });
     expect(callArgs.files).toEqual([
       expect.objectContaining({ content: '# Skill', path: 'skill.md' }),

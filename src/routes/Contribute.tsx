@@ -212,7 +212,6 @@ export function ContributeRoute() {
         octokit,
         onProgress: (event) => setProgress(event),
         readme: draft.readme,
-        user: { login: user.login },
       });
       skipNextPersistRef.current = true;
       clearDraftFromStorage();

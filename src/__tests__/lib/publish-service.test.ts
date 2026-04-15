@@ -7,7 +7,6 @@ import type { Manifest } from '@/lib/schemas/manifest';
 
 import {
   PublishBranchCollisionError,
-  PublishDefaultBranchChangedError,
   PublishNetworkError,
   PublishPermissionError,
   PublishRateLimitError,
@@ -26,11 +25,9 @@ interface FakeOctokitResult {
 interface OctokitQueues {
   createBlob?: Handler[];
   createCommit?: Handler[];
-  createFork?: Handler[];
   createRef?: Handler[];
   createTree?: Handler[];
   getRef?: Handler[];
-  mergeUpstream?: Handler[];
   pullsCreate?: Handler[];
   reposGet?: Handler[];
 }
@@ -65,11 +62,9 @@ function makeFakeOctokit(queues: OctokitQueues): FakeOctokitResult {
   const spies = {
     createBlob: queue(queues.createBlob),
     createCommit: queue(queues.createCommit),
-    createFork: queue(queues.createFork),
     createRef: queue(queues.createRef),
     createTree: queue(queues.createTree),
     getRef: queue(queues.getRef),
-    mergeUpstream: queue(queues.mergeUpstream),
     pullsCreate: queue(queues.pullsCreate),
     reposGet: queue(queues.reposGet),
   } as Record<keyof OctokitQueues, ReturnType<typeof vi.fn>>;
@@ -85,9 +80,7 @@ function makeFakeOctokit(queues: OctokitQueues): FakeOctokitResult {
       },
       pulls: { create: spies.pullsCreate },
       repos: {
-        createFork: spies.createFork,
         get: spies.reposGet,
-        mergeUpstream: spies.mergeUpstream,
       },
     },
   } as unknown as Octokit;
@@ -123,14 +116,10 @@ function happyPathQueues(): OctokitQueues {
         throw httpError(404, 'not found');
       },
     ],
-    mergeUpstream: [() => ({ data: {} })],
     pullsCreate: [
       () => ({ data: { html_url: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/42' } }),
     ],
-    reposGet: [
-      () => ({ data: { default_branch: 'main' } }),
-      () => ({ data: { default_branch: 'main' } }),
-    ],
+    reposGet: [() => ({ data: { default_branch: 'main' } })],
   };
 }
 
@@ -150,7 +139,6 @@ describe('publishContribution', () => {
       onProgress: (event) => progress.push(event.step),
       readme: '# Hello',
       retry: fastRetry,
-      user: { login: 'octo-login' },
     });
 
     expect(result.prUrl).toMatch(/pull\/42$/);
@@ -158,17 +146,31 @@ describe('publishContribution', () => {
     expect(result.branchName).toBe('asset/skill/my-skill/1.0.0');
     expect(progress).toEqual(['preparing-workspace', 'uploading-files', 'opening-pull-request']);
 
-    // 2 blobs: manifest.json + skill.md (README also — 3 blobs)
+    // 3 blobs: manifest.json + skill.md + README.md
     expect(spies.createBlob).toHaveBeenCalledTimes(3);
     expect(spies.createTree).toHaveBeenCalledTimes(1);
     expect(spies.createCommit).toHaveBeenCalledTimes(1);
     expect(spies.createRef).toHaveBeenCalledTimes(1);
     expect(spies.pullsCreate).toHaveBeenCalledTimes(1);
 
+    // Single reposGet on upstream — no fork lookup.
+    expect(spies.reposGet).toHaveBeenCalledTimes(1);
+    expect(spies.reposGet).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
+    );
+
+    // All Git Data API calls target the upstream owner directly.
+    expect(spies.createBlob).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
+    );
+    expect(spies.createRef).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
+    );
+
     expect(spies.pullsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         base: 'main',
-        head: 'octo-login:asset/skill/my-skill/1.0.0',
+        head: 'asset/skill/my-skill/1.0.0',
         owner: 'EmergentSoftware',
         repo: 'agentic-toolkit-registry',
         title: 'feat(registry): add skill my-skill@1.0.0',
@@ -176,64 +178,7 @@ describe('publishContribution', () => {
     );
   });
 
-  it('creates the fork when it does not yet exist', async () => {
-    const queues: OctokitQueues = {
-      ...happyPathQueues(),
-      createFork: [() => ({ data: {} })],
-      reposGet: [
-        // upstream
-        () => ({ data: { default_branch: 'main' } }),
-        // fork lookup → 404
-        () => {
-          throw httpError(404);
-        },
-        // first poll → 404
-        () => {
-          throw httpError(404);
-        },
-        // second poll → ready
-        () => ({ data: { default_branch: 'main' } }),
-      ],
-    };
-    const { octokit, spies } = makeFakeOctokit(queues);
-
-    const result = await publishContribution({
-      files: baseFiles(),
-      forkPollDelayMs: 1,
-      manifest: baseManifest(),
-      octokit,
-      readme: '',
-      retry: fastRetry,
-      user: { login: 'octo-login' },
-    });
-
-    expect(result.prUrl).toMatch(/pull\/42$/);
-    expect(spies.createFork).toHaveBeenCalledTimes(1);
-    expect(spies.reposGet).toHaveBeenCalledTimes(4);
-  });
-
-  it('calls mergeUpstream to sync a stale fork', async () => {
-    const { octokit, spies } = makeFakeOctokit(happyPathQueues());
-
-    await publishContribution({
-      files: baseFiles(),
-      manifest: baseManifest(),
-      octokit,
-      readme: '',
-      retry: fastRetry,
-      user: { login: 'octo-login' },
-    });
-
-    expect(spies.mergeUpstream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        branch: 'main',
-        owner: 'octo-login',
-        repo: 'agentic-toolkit-registry',
-      }),
-    );
-  });
-
-  it('throws PublishBranchCollisionError when the fork branch already exists', async () => {
+  it('throws PublishBranchCollisionError when the branch already exists', async () => {
     const queues: OctokitQueues = {
       ...happyPathQueues(),
       getRef: [
@@ -252,7 +197,6 @@ describe('publishContribution', () => {
         octokit,
         readme: '',
         retry: fastRetry,
-        user: { login: 'octo-login' },
       }),
     ).rejects.toBeInstanceOf(PublishBranchCollisionError);
   });
@@ -274,7 +218,6 @@ describe('publishContribution', () => {
         octokit,
         readme: '',
         retry: fastRetry,
-        user: { login: 'octo-login' },
       }),
     ).rejects.toBeInstanceOf(PublishRateLimitError);
   });
@@ -296,31 +239,8 @@ describe('publishContribution', () => {
         octokit,
         readme: '',
         retry: fastRetry,
-        user: { login: 'octo-login' },
       }),
     ).rejects.toBeInstanceOf(PublishPermissionError);
-  });
-
-  it('throws PublishDefaultBranchChangedError when fork default_branch drifts', async () => {
-    const queues: OctokitQueues = {
-      ...happyPathQueues(),
-      reposGet: [
-        () => ({ data: { default_branch: 'main' } }),
-        () => ({ data: { default_branch: 'trunk' } }),
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
-
-    await expect(
-      publishContribution({
-        files: baseFiles(),
-        manifest: baseManifest(),
-        octokit,
-        readme: '',
-        retry: fastRetry,
-        user: { login: 'octo-login' },
-      }),
-    ).rejects.toBeInstanceOf(PublishDefaultBranchChangedError);
   });
 
   it('maps transport failures to PublishNetworkError', async () => {
@@ -340,7 +260,6 @@ describe('publishContribution', () => {
         octokit,
         readme: '',
         retry: fastRetry,
-        user: { login: 'octo-login' },
       }),
     ).rejects.toBeInstanceOf(PublishNetworkError);
   });
@@ -357,7 +276,6 @@ describe('publishContribution', () => {
       octokit,
       readme: '',
       retry: fastRetry,
-      user: { login: 'octo-login' },
     });
 
     expect(result.dryRun).toBe(true);
@@ -379,7 +297,6 @@ describe('publishContribution', () => {
       octokit,
       readme: '',
       retry: fastRetry,
-      user: { login: 'octo-login' },
     });
 
     expect(treeSpy).toHaveBeenCalledTimes(1);

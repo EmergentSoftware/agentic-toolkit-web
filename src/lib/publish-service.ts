@@ -4,13 +4,7 @@ import type { Octokit } from '@octokit/rest';
 import type { Manifest } from './schemas/manifest';
 
 import { callWithRetry, type RetryOptions } from './fetch-retry';
-import {
-  mapOctokitError,
-  PublishBranchCollisionError,
-  PublishDefaultBranchChangedError,
-  PublishError,
-  PublishNetworkError,
-} from './publish-errors';
+import { mapOctokitError, PublishBranchCollisionError, PublishError } from './publish-errors';
 import { DEFAULT_OWNER, DEFAULT_REPO } from './registry-client';
 
 export interface PublishFileEntry {
@@ -32,15 +26,12 @@ export interface PublishProgressEvent {
 export interface PublishContributionOptions {
   dryRun?: boolean;
   files: PublishFileEntry[];
-  /** Override for the fork-readiness polling delay. Tests use a small value to keep runs fast. */
-  forkPollDelayMs?: number;
   manifest: Manifest;
   octokit: Octokit;
   onProgress?: (event: PublishProgressEvent) => void;
   readme: string;
   retry?: RetryOptions;
   signal?: AbortSignal;
-  user: { login: string };
 }
 
 export interface PublishResult {
@@ -59,27 +50,17 @@ const PROGRESS_COPY: Record<PublishProgressStep, string> = {
 export const DRY_RUN_PR_URL_MARKER = 'https://dry-run.local/atk/contribute/preview';
 
 /**
- * Publish a prepared contribution to the registry by forking EmergentSoftware/agentic-toolkit-registry
- * (if needed), syncing the fork, committing the generated files via the Git Data API, and opening
- * a pull request against the registry's default branch.
+ * Publish a prepared contribution by pushing a branch directly to
+ * EmergentSoftware/agentic-toolkit-registry via the Git Data API and opening a
+ * pull request against the default branch. This mirrors the CLI's `atk publish`
+ * flow and requires the authenticated user to have push access to the registry.
  *
- * When `dryRun` is true every step runs up to — but skipping — the final PR creation, and the
- * result contains the synthesized DRY_RUN_PR_URL_MARKER so QA can exercise the full flow without
- * creating a real PR.
+ * When `dryRun` is true every step runs up to — but skipping — the final PR
+ * creation, and the result contains the synthesized DRY_RUN_PR_URL_MARKER so
+ * QA can exercise the full flow without creating a real PR.
  */
 export async function publishContribution(options: PublishContributionOptions): Promise<PublishResult> {
-  const {
-    dryRun = false,
-    files,
-    forkPollDelayMs = 1_000,
-    manifest,
-    octokit,
-    onProgress,
-    readme,
-    retry,
-    signal,
-    user,
-  } = options;
+  const { dryRun = false, files, manifest, octokit, onProgress, readme, retry, signal } = options;
 
   const emit = (step: PublishProgressStep) => {
     onProgress?.({ message: PROGRESS_COPY[step], step });
@@ -88,37 +69,12 @@ export async function publishContribution(options: PublishContributionOptions): 
   try {
     emit('preparing-workspace');
 
-    const upstreamRepo = await getRepo(octokit, DEFAULT_OWNER, DEFAULT_REPO, retry, signal);
+    const upstreamRepo = await getRepo(octokit, retry, signal);
     const defaultBranch = upstreamRepo.default_branch;
-
-    const fork = await ensureFork({
-      octokit,
-      pollDelayMs: forkPollDelayMs,
-      retry,
-      signal,
-      userLogin: user.login,
-    });
-
-    if (fork.default_branch !== defaultBranch) {
-      throw new PublishDefaultBranchChangedError({
-        expected: defaultBranch,
-        found: fork.default_branch,
-      });
-    }
-
-    await syncForkDefaultBranch({
-      defaultBranch,
-      octokit,
-      retry,
-      signal,
-      userLogin: user.login,
-    });
 
     const upstreamRef = await getRef({
       octokit,
-      owner: DEFAULT_OWNER,
       ref: `heads/${defaultBranch}`,
-      repo: DEFAULT_REPO,
       retry,
       signal,
     });
@@ -131,7 +87,6 @@ export async function publishContribution(options: PublishContributionOptions): 
       octokit,
       retry,
       signal,
-      userLogin: user.login,
     });
 
     emit('uploading-files');
@@ -143,7 +98,7 @@ export async function publishContribution(options: PublishContributionOptions): 
             octokit.rest.git.createBlob({
               content: toBase64(file.content),
               encoding: 'base64',
-              owner: user.login,
+              owner: DEFAULT_OWNER,
               repo: DEFAULT_REPO,
               ...(signal ? { request: { signal } } : {}),
             }),
@@ -160,7 +115,7 @@ export async function publishContribution(options: PublishContributionOptions): 
       () =>
         octokit.rest.git.createTree({
           base_tree: baseSha,
-          owner: user.login,
+          owner: DEFAULT_OWNER,
           repo: DEFAULT_REPO,
           tree: blobs.map((blob) => ({
             mode: '100644',
@@ -180,7 +135,7 @@ export async function publishContribution(options: PublishContributionOptions): 
       () =>
         octokit.rest.git.createCommit({
           message: plan.prTitle,
-          owner: user.login,
+          owner: DEFAULT_OWNER,
           parents: [baseSha],
           repo: DEFAULT_REPO,
           tree: tree.data.sha,
@@ -195,7 +150,7 @@ export async function publishContribution(options: PublishContributionOptions): 
     await callWithRetry(
       () =>
         octokit.rest.git.createRef({
-          owner: user.login,
+          owner: DEFAULT_OWNER,
           ref: `refs/heads/${plan.branchName}`,
           repo: DEFAULT_REPO,
           sha: commit.data.sha,
@@ -227,7 +182,7 @@ export async function publishContribution(options: PublishContributionOptions): 
         octokit.rest.pulls.create({
           base: defaultBranch,
           body: plan.prBody,
-          head: `${user.login}:${plan.branchName}`,
+          head: plan.branchName,
           owner: DEFAULT_OWNER,
           repo: DEFAULT_REPO,
           title: plan.prTitle,
@@ -348,8 +303,6 @@ function generatePrBody(params: { listedFiles: string[]; manifest: Manifest }): 
 
 async function getRepo(
   octokit: Octokit,
-  owner: string,
-  repo: string,
   retry: RetryOptions | undefined,
   signal: AbortSignal | undefined,
 ): Promise<{ default_branch: string }> {
@@ -357,50 +310,6 @@ async function getRepo(
     const response = await callWithRetry(
       () =>
         octokit.rest.repos.get({
-          owner,
-          repo,
-          ...(signal ? { request: { signal } } : {}),
-        }),
-      retry,
-      signal,
-    );
-    return { default_branch: response.data.default_branch };
-  } catch (error) {
-    throw wrapError(error);
-  }
-}
-
-async function ensureFork(params: {
-  octokit: Octokit;
-  pollDelayMs: number;
-  retry: RetryOptions | undefined;
-  signal: AbortSignal | undefined;
-  userLogin: string;
-}): Promise<{ default_branch: string }> {
-  const { octokit, pollDelayMs, retry, signal, userLogin } = params;
-
-  try {
-    const response = await callWithRetry(
-      () =>
-        octokit.rest.repos.get({
-          owner: userLogin,
-          repo: DEFAULT_REPO,
-          ...(signal ? { request: { signal } } : {}),
-        }),
-      retry,
-      signal,
-    );
-    return { default_branch: response.data.default_branch };
-  } catch (error) {
-    const status = (error as { status?: number }).status;
-    if (status !== 404) throw wrapError(error);
-  }
-
-  // Fork does not exist — create it.
-  try {
-    await callWithRetry(
-      () =>
-        octokit.rest.repos.createFork({
           owner: DEFAULT_OWNER,
           repo: DEFAULT_REPO,
           ...(signal ? { request: { signal } } : {}),
@@ -408,84 +317,26 @@ async function ensureFork(params: {
       retry,
       signal,
     );
+    return { default_branch: response.data.default_branch };
   } catch (error) {
-    throw wrapError(error);
-  }
-
-  // Poll until the new fork is accessible.
-  const maxAttempts = 10;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await sleep(pollDelayMs + attempt * Math.floor(pollDelayMs / 2), signal);
-    try {
-      const response = await callWithRetry(
-        () =>
-          octokit.rest.repos.get({
-            owner: userLogin,
-            repo: DEFAULT_REPO,
-            ...(signal ? { request: { signal } } : {}),
-          }),
-        retry,
-        signal,
-      );
-      return { default_branch: response.data.default_branch };
-    } catch (error) {
-      const status = (error as { status?: number }).status;
-      if (status !== 404) throw wrapError(error);
-      // otherwise keep polling
-    }
-  }
-
-  throw new PublishNetworkError({
-    cause: new Error('Timed out waiting for fork to become available'),
-  });
-}
-
-async function syncForkDefaultBranch(params: {
-  defaultBranch: string;
-  octokit: Octokit;
-  retry: RetryOptions | undefined;
-  signal: AbortSignal | undefined;
-  userLogin: string;
-}): Promise<void> {
-  const { defaultBranch, octokit, retry, signal, userLogin } = params;
-  try {
-    await callWithRetry(
-      () =>
-        (octokit.rest.repos as unknown as {
-          mergeUpstream: (args: unknown) => Promise<unknown>;
-        }).mergeUpstream({
-          branch: defaultBranch,
-          owner: userLogin,
-          repo: DEFAULT_REPO,
-          ...(signal ? { request: { signal } } : {}),
-        }),
-      retry,
-      signal,
-    );
-  } catch (error) {
-    const status = (error as { status?: number }).status;
-    // 409 = no upstream changes / already synced — treat as success.
-    if (status === 409) return;
     throw wrapError(error);
   }
 }
 
 async function getRef(params: {
   octokit: Octokit;
-  owner: string;
   ref: string;
-  repo: string;
   retry: RetryOptions | undefined;
   signal: AbortSignal | undefined;
 }): Promise<{ object: { sha: string } }> {
-  const { octokit, owner, ref, repo, retry, signal } = params;
+  const { octokit, ref, retry, signal } = params;
   try {
     const response = await callWithRetry(
       () =>
         octokit.rest.git.getRef({
-          owner,
+          owner: DEFAULT_OWNER,
           ref,
-          repo,
+          repo: DEFAULT_REPO,
           ...(signal ? { request: { signal } } : {}),
         }),
       retry,
@@ -502,14 +353,13 @@ async function ensureBranchAvailable(params: {
   octokit: Octokit;
   retry: RetryOptions | undefined;
   signal: AbortSignal | undefined;
-  userLogin: string;
 }): Promise<void> {
-  const { branchName, octokit, retry, signal, userLogin } = params;
+  const { branchName, octokit, retry, signal } = params;
   try {
     await callWithRetry(
       () =>
         octokit.rest.git.getRef({
-          owner: userLogin,
+          owner: DEFAULT_OWNER,
           ref: `heads/${branchName}`,
           repo: DEFAULT_REPO,
           ...(signal ? { request: { signal } } : {}),
@@ -546,22 +396,4 @@ function toBase64(content: string): string {
   }
   // Node fallback used in tests.
   return Buffer.from(content, 'utf-8').toString('base64');
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(timer);
-      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
 }
