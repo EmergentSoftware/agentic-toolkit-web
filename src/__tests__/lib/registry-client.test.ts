@@ -2,7 +2,13 @@ import type { Octokit } from '@octokit/rest';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchAssetManifest, fetchAssetReadme, fetchBundleManifest, fetchRegistry } from '@/lib/registry-client';
+import {
+  fetchAssetManifest,
+  fetchAssetReadme,
+  fetchBundleManifest,
+  fetchRegistry,
+  findExistingAsset,
+} from '@/lib/registry-client';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from '@/lib/registry-errors';
 
 import { loadFixtureRegistry } from '../fixtures';
@@ -241,6 +247,53 @@ describe('registry-client (Octokit-backed)', () => {
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({ path: 'bundles/quality-bundle/bundle.json' }),
       );
+    });
+  });
+
+  describe('findExistingAsset', () => {
+    it('matches an org-scoped asset by name, type, and org', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, {
+        name: 'validate',
+        org: 'agentic-toolkit',
+        type: 'agent',
+      });
+      expect(result).toEqual({ latest: '1.1.0', org: 'agentic-toolkit' });
+    });
+
+    it('falls back to a global asset when an org-scoped match is missing', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, {
+        name: 'clarification-agent',
+        org: 'acme',
+        type: 'agent',
+      });
+      expect(result).toEqual({ latest: '1.0.0', org: undefined });
+    });
+
+    it('matches a global asset when no org is provided', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, { name: 'feature-skill', type: 'skill' });
+      expect(result).toEqual({ latest: '0.2.0', org: undefined });
+    });
+
+    it('does not fall back to org-scoped assets when org is absent', () => {
+      const registry = loadFixtureRegistry();
+      // "validate" only exists under the agentic-toolkit org in the fixture.
+      const result = findExistingAsset(registry, { name: 'validate', type: 'agent' });
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined when nothing matches', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, { name: 'does-not-exist', type: 'skill' });
+      expect(result).toBeUndefined();
+    });
+
+    it('filters by type — same name in a different type is not a match', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, { name: 'dev-commands-rule', type: 'skill' });
+      expect(result).toBeUndefined();
     });
   });
 });

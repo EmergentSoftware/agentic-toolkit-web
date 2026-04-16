@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as publishServiceModule from '@/lib/publish-service';
+import * as registryClientModule from '@/lib/registry-client';
 import {
   buildManifestInput,
   ContributeRoute,
@@ -16,6 +17,7 @@ import {
   validateDraft,
 } from '@/routes/Contribute';
 
+import { loadFixtureRegistry } from '../fixtures';
 import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
 interface FakeDirTree {
@@ -455,5 +457,96 @@ describe('Contribute — wizard UI', () => {
     fillMetadata({ version: 'v1.0' });
     // Next button should be disabled due to invalid version
     expect(screen.getByTestId('wizard-next')).toBeDisabled();
+  });
+});
+
+describe('Contribute — version conflict detection', () => {
+  async function advanceToMetadata(octokit: Octokit) {
+    renderContribute('octo-login', { octokit });
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('skill.md', '# Skill')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    // Wait for registry fetch to resolve and conflict effect to fire.
+    await flush();
+    await flush();
+  }
+
+  it('blocks Next and shows bump buttons when the version is not newer than the registry latest', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.2.0' });
+    await flush();
+
+    expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('bump-patch'));
+    await flush();
+
+    expect((screen.getByTestId('field-version') as HTMLInputElement).value).toBe('0.2.1');
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('version-update-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('shows an update badge when the version is strictly greater than the registry latest', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.3.0' });
+    await flush();
+
+    const badge = screen.getByTestId('version-update-badge');
+    expect(badge).toHaveTextContent('Updating v0.2.0 → v0.3.0');
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('shows no conflict UI when the asset name does not exist in the registry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    fillMetadata({ description: 'desc', name: 'brand-new-skill', version: '1.0.0' });
+    await flush();
+
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('version-update-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('carries the update badge into the Review step', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.3.0' });
+    await flush();
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+
+    expect(screen.getByTestId('review-update-badge')).toHaveTextContent('Updating v0.2.0 → v0.3.0');
+  });
+
+  it('recomputes on org change — org-scoped match takes precedence over the global fallback', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', { octokit });
+    fireEvent.click(screen.getByTestId('asset-type-agent'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('agent.md', '# Agent')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await flush();
+    await flush();
+
+    // Without an org, "validate" has no global match.
+    fillMetadata({ description: 'desc', name: 'validate', version: '1.0.0' });
+    await flush();
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+
+    // Adding the org hits the org-scoped "validate@1.1.0".
+    fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'agentic-toolkit' } });
+    await flush();
+    expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
   });
 });

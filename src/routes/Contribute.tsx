@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { valid as semverValid } from 'semver';
+import { compare as semverCompare, valid as semverValid } from 'semver';
 import { z } from 'zod';
 
 import { LoadingIndicator } from '@/components/LoadingIndicator';
@@ -18,7 +18,10 @@ import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
 import { PublishError } from '@/lib/publish-errors';
 import { publishContribution, type PublishProgressEvent } from '@/lib/publish-service';
+import { fetchRegistry, findExistingAsset } from '@/lib/registry-client';
 import { AssetType, type Manifest, ManifestSchema } from '@/lib/schemas/manifest';
+import { type Registry } from '@/lib/schemas/registry';
+import { type BumpType, bumpVersion } from '@/lib/version-utils';
 
 export const DRAFT_STORAGE_KEY = 'atk:contribute:draft';
 
@@ -34,12 +37,18 @@ export interface DraftState {
   tags: string[];
   type: '' | AssetType;
   version: string;
+  versionConflict: VersionConflictState;
 }
 
 export interface FileEntry {
   content: string;
   path: string;
   size: number;
+}
+
+export interface VersionConflictState {
+  latestVersion?: string;
+  status: 'conflict' | 'none' | 'update';
 }
 
 const ASSET_TYPES: AssetType[] = ['skill', 'agent', 'rule', 'hook', 'memory-template', 'mcp-config'];
@@ -68,6 +77,7 @@ export function createInitialDraft(author = ''): DraftState {
     tags: [],
     type: '',
     version: '1.0.0',
+    versionConflict: { status: 'none' },
   };
 }
 
@@ -134,6 +144,26 @@ export function clearDraftFromStorage(): void {
   window.sessionStorage.removeItem(DRAFT_STORAGE_KEY);
 }
 
+export function computeVersionConflict(
+  draft: DraftState,
+  registry: null | Registry,
+): VersionConflictState {
+  if (!registry) return { status: 'none' };
+  if (!draft.name || !draft.type || !isValidSemver(draft.version)) {
+    return { status: 'none' };
+  }
+  const found = findExistingAsset(registry, {
+    name: draft.name,
+    org: draft.org || undefined,
+    type: draft.type,
+  });
+  if (!found) return { status: 'none' };
+  const cmp = semverCompare(draft.version, found.latest);
+  return cmp > 0
+    ? { latestVersion: found.latest, status: 'update' }
+    : { latestVersion: found.latest, status: 'conflict' };
+}
+
 export function ContributeRoute() {
   const { octokit, user } = useSession();
   const toast = useToast();
@@ -143,8 +173,10 @@ export function ContributeRoute() {
   const [draft, setDraft] = useState<DraftState>(() => createInitialDraft(defaultAuthor));
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
+  const [registry, setRegistry] = useState<null | Registry>(null);
   const hydratedRef = useRef(false);
   const skipNextPersistRef = useRef(false);
+  const registryFetchStartedRef = useRef(false);
 
   const dryRun = useMemo(() => {
     const search = location.search || window.location.hash.split('?')[1] || '';
@@ -172,6 +204,36 @@ export function ContributeRoute() {
     }
     persistDraft(draft);
   }, [draft]);
+
+  useEffect(() => {
+    if (draft.step !== 2) return;
+    if (registry) return;
+    if (!octokit) return;
+    if (registryFetchStartedRef.current) return;
+    registryFetchStartedRef.current = true;
+    let cancelled = false;
+    fetchRegistry({ octokit })
+      .then((r) => {
+        if (!cancelled) setRegistry(r);
+      })
+      .catch(() => {
+        if (!cancelled) registryFetchStartedRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.step, registry, octokit]);
+
+  useEffect(() => {
+    setDraft((prev) => {
+      const next = computeVersionConflict(prev, registry);
+      const current = prev.versionConflict;
+      if (current.status === next.status && current.latestVersion === next.latestVersion) {
+        return prev;
+      }
+      return { ...prev, versionConflict: next };
+    });
+  }, [registry, draft.name, draft.org, draft.type, draft.version]);
 
   const update = <K extends keyof DraftState>(key: K, value: DraftState[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -318,17 +380,17 @@ export function loadDraftFromStorage(): null | Partial<DraftState> {
   }
 }
 
+export default ContributeRoute;
+
 export function persistDraft(draft: DraftState): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { files, ...persisted } = draft;
+    const { files, versionConflict, ...persisted } = draft;
     window.sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(persisted));
   } catch {
     // Ignore quota errors — draft persistence is best-effort.
   }
 }
-
-export default ContributeRoute;
 
 export function validateDraft(draft: DraftState): z.ZodSafeParseResult<Manifest> {
   return ManifestSchema.safeParse(buildManifestInput(draft));
@@ -403,7 +465,8 @@ function getStepValidity(draft: DraftState): StepValidity {
     draft.description.trim().length > 0 &&
     (!draft.org || ORG_REGEX.test(draft.org)) &&
     isValidSemver(draft.version) &&
-    draft.author.trim().length > 0;
+    draft.author.trim().length > 0 &&
+    draft.versionConflict.status !== 'conflict';
   const s3 = true;
   const canProceedFrom = [s0, s0 && s1, s0 && s1 && s2, s0 && s1 && s2 && s3, false];
   let highest = 0;
@@ -670,6 +733,15 @@ function StepMetadata({ draft, onChange }: StepProps) {
         <CardTitle id='contribute-step-heading'>Step 3 — Metadata</CardTitle>
       </CardHeader>
       <CardContent className='space-y-5'>
+        <VersionConflictPanel
+          onBump={(type) => {
+            const latest = draft.versionConflict.latestVersion;
+            if (!latest) return;
+            onChange('version', bumpVersion(latest, type));
+          }}
+          state={draft.versionConflict}
+          userVersion={draft.version}
+        />
         <div className='grid gap-4 sm:grid-cols-2'>
           <div className='space-y-1.5'>
             <Label htmlFor='contrib-name'>Name</Label>
@@ -857,6 +929,13 @@ function StepReview({ draft, validation }: StepReviewProps) {
           description='Verify the generated manifest, file list, and README before submitting.'
           title='Review your contribution'
         />
+        {draft.versionConflict.status === 'update' && draft.versionConflict.latestVersion ? (
+          <div data-testid='review-update-badge'>
+            <Badge variant='secondary'>
+              Updating v{draft.versionConflict.latestVersion} → v{draft.version}
+            </Badge>
+          </div>
+        ) : null}
         <div>
           <h3 className='pb-2 text-sm font-semibold'>Manifest</h3>
           <pre
@@ -967,6 +1046,88 @@ function stripCommonRoot(files: FileEntry[]): FileEntry[] {
   return files
     .map((f) => ({ ...f, path: f.path.slice(prefix.length) }))
     .filter((f) => f.path.length > 0);
+}
+
+function VersionConflictPanel({
+  onBump,
+  state,
+  userVersion,
+}: {
+  onBump: (type: BumpType) => void;
+  state: VersionConflictState;
+  userVersion: string;
+}) {
+  if (state.status === 'none' || !state.latestVersion) return null;
+  const latest = state.latestVersion;
+  if (state.status === 'update') {
+    return (
+      <div aria-live='polite' data-testid='version-update-badge' role='status'>
+        <Badge variant='secondary'>
+          Updating v{latest} → v{userVersion}
+        </Badge>
+      </div>
+    );
+  }
+  const safeBump = (type: BumpType): null | string => {
+    try {
+      return bumpVersion(latest, type);
+    } catch {
+      return null;
+    }
+  };
+  const patchPreview = safeBump('patch');
+  const minorPreview = safeBump('minor');
+  const majorPreview = safeBump('major');
+  return (
+    <div
+      aria-live='polite'
+      className='rounded-md border border-destructive/50 bg-destructive/5 p-4'
+      data-testid='version-conflict-panel'
+      role='status'
+    >
+      <p className='pb-1 text-sm font-semibold text-destructive' data-testid='version-conflict-message'>
+        Version {userVersion} is not newer than the published v{latest}.
+      </p>
+      <p className='pb-3 text-xs text-muted-foreground'>
+        Bump the version to continue. The registry already has v{latest}.
+      </p>
+      <div className='flex flex-wrap gap-2'>
+        {patchPreview ? (
+          <Button
+            data-testid='bump-patch'
+            onClick={() => onBump('patch')}
+            size='sm'
+            type='button'
+            variant='outline'
+          >
+            Patch → v{patchPreview}
+          </Button>
+        ) : null}
+        {minorPreview ? (
+          <Button
+            data-testid='bump-minor'
+            onClick={() => onBump('minor')}
+            size='sm'
+            type='button'
+            variant='outline'
+          >
+            Minor → v{minorPreview}
+          </Button>
+        ) : null}
+        {majorPreview ? (
+          <Button
+            data-testid='bump-major'
+            onClick={() => onBump('major')}
+            size='sm'
+            type='button'
+            variant='outline'
+          >
+            Major → v{majorPreview}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 async function walkFsEntry(entry: FileSystemEntry): Promise<FileEntry[]> {

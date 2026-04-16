@@ -79,6 +79,25 @@ export async function fetchRegistry(options: RegistryClientOptions): Promise<Reg
   return await fetchAndParse<Registry>('registry.json', RegistrySchema, options);
 }
 
+/**
+ * Look up an asset in the registry using the CLI's resolution semantics:
+ * when `org` is provided, prefer an org-scoped match and fall back to a
+ * global (unscoped) asset; otherwise match only unscoped assets. Returns
+ * the matching `RegistryAsset` or `undefined` when no match is found.
+ */
+export function findExistingAsset(
+  registry: Registry,
+  query: { name: string; org?: string; type: AssetType },
+): undefined | { latest: string; org?: string } {
+  const { name, org, type } = query;
+  const match = org
+    ? registry.assets.find((a) => a.name === name && a.type === type && a.org === org) ??
+      registry.assets.find((a) => a.name === name && a.type === type && a.org === undefined)
+    : registry.assets.find((a) => a.name === name && a.type === type && a.org === undefined);
+  if (!match) return undefined;
+  return { latest: match.latest, org: match.org };
+}
+
 function buildAssetManifestPath(ref: AssetManifestRef): string {
   const typeDir = `${ref.type}s`;
   const parts = ['assets', typeDir];
