@@ -24,6 +24,12 @@ export function useFullWidthLayout(): void {
   }, [ctx]);
 }
 
+export function useLayoutWidth(): LayoutWidthContextValue {
+  const ctx = useContext(LayoutWidthContext);
+  if (!ctx) throw new Error('useLayoutWidth must be used within a <LayoutWidthProvider>');
+  return ctx;
+}
+
 export function useWideLayout(): void {
   const ctx = useContext(LayoutWidthContext);
   useEffect(() => {
@@ -31,10 +37,4 @@ export function useWideLayout(): void {
     ctx.setWidth('wide');
     return () => ctx.setWidth('standard');
   }, [ctx]);
-}
-
-export function useLayoutWidth(): LayoutWidthContextValue {
-  const ctx = useContext(LayoutWidthContext);
-  if (!ctx) throw new Error('useLayoutWidth must be used within a <LayoutWidthProvider>');
-  return ctx;
 }

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { compare as semverCompare, valid as semverValid } from 'semver';
 import { z } from 'zod';
 
+import { useWideLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
@@ -14,7 +15,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { useWideLayout } from '@/components/layout/LayoutWidthContext';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
 import { PublishError } from '@/lib/publish-errors';
