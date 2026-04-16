@@ -80,20 +80,19 @@ export async function fetchRegistry(options: RegistryClientOptions): Promise<Reg
 }
 
 /**
- * Look up an asset in the registry using the CLI's resolution semantics:
- * when `org` is provided, prefer an org-scoped match and fall back to a
- * global (unscoped) asset; otherwise match only unscoped assets. Returns
- * the matching `RegistryAsset` or `undefined` when no match is found.
+ * Look up an asset in the registry using strict, symmetric scope matching:
+ * an org-scoped query matches only entries in the same org; an unscoped
+ * query matches only unscoped entries. Cross-scope name collisions are
+ * never reported as matches.
  */
 export function findExistingAsset(
   registry: Registry,
   query: { name: string; org?: string; type: AssetType },
 ): undefined | { latest: string; org?: string } {
   const { name, org, type } = query;
-  const match = org
-    ? registry.assets.find((a) => a.name === name && a.type === type && a.org === org) ??
-      registry.assets.find((a) => a.name === name && a.type === type && a.org === undefined)
-    : registry.assets.find((a) => a.name === name && a.type === type && a.org === undefined);
+  const match = registry.assets.find(
+    (a) => a.name === name && a.type === type && a.org === (org || undefined),
+  );
   if (!match) return undefined;
   return { latest: match.latest, org: match.org };
 }

@@ -261,14 +261,37 @@ describe('registry-client (Octokit-backed)', () => {
       expect(result).toEqual({ latest: '1.1.0', org: 'agentic-toolkit' });
     });
 
-    it('falls back to a global asset when an org-scoped match is missing', () => {
+    it('does not fall back to a global asset when an org-scoped match is missing', () => {
       const registry = loadFixtureRegistry();
+      // "clarification-agent" exists only as a global entry; an org-scoped
+      // query for the same name must not match it.
       const result = findExistingAsset(registry, {
         name: 'clarification-agent',
         org: 'acme',
         type: 'agent',
       });
-      expect(result).toEqual({ latest: '1.0.0', org: undefined });
+      expect(result).toBeUndefined();
+    });
+
+    it('does not match an org-scoped entry from a different org', () => {
+      const registry = loadFixtureRegistry();
+      // "validate" only exists under the agentic-toolkit org.
+      const result = findExistingAsset(registry, {
+        name: 'validate',
+        org: 'someone-else',
+        type: 'agent',
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it('treats an empty-string org as unscoped', () => {
+      const registry = loadFixtureRegistry();
+      const result = findExistingAsset(registry, {
+        name: 'feature-skill',
+        org: '',
+        type: 'skill',
+      });
+      expect(result).toEqual({ latest: '0.2.0', org: undefined });
     });
 
     it('matches a global asset when no org is provided', () => {

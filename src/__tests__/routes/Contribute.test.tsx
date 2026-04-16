@@ -534,7 +534,7 @@ describe('Contribute — version conflict detection', () => {
     expect(screen.getByTestId('review-update-badge')).toHaveTextContent('Updating v0.2.0 → v0.3.0');
   });
 
-  it('recomputes on org change — org-scoped match takes precedence over the global fallback', async () => {
+  it('recomputes on org change — adding the matching org reveals the conflict panel', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
     const octokit = { rest: {} } as unknown as Octokit;
     renderContribute('octo-login', { octokit });
@@ -545,7 +545,7 @@ describe('Contribute — version conflict detection', () => {
     await flush();
     await flush();
 
-    // Without an org, "validate" has no global match.
+    // Without an org, "validate" has no global match (strict scoping — no fallback).
     fillMetadata({ description: 'desc', name: 'validate', version: '1.0.0' });
     await flush();
     expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
@@ -554,6 +554,91 @@ describe('Contribute — version conflict detection', () => {
     fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'agentic-toolkit' } });
     await flush();
     expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
+  });
+
+  it('shows no conflict panel when an org-scoped draft shares a name with a global-only registry entry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    // "feature-skill" exists only as a global entry in the fixture; an org-scoped
+    // draft of the same name+type must not be matched against it.
+    fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.2.0' });
+    fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'myorg' } });
+    await flush();
+
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('version-update-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('shows no conflict panel when a global draft shares a name with an org-scoped-only registry entry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', { octokit });
+    fireEvent.click(screen.getByTestId('asset-type-agent'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('agent.md', '# Agent')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await flush();
+    await flush();
+    // "validate" only exists under the agentic-toolkit org; a global draft of
+    // the same name+type must not match the org-scoped entry.
+    fillMetadata({ description: 'desc', name: 'validate', version: '1.0.0' });
+    await flush();
+
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('version-update-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('shows no conflict panel when an org-scoped draft matches a different org-scoped registry entry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', { octokit });
+    fireEvent.click(screen.getByTestId('asset-type-agent'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('agent.md', '# Agent')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await flush();
+    await flush();
+    // "validate" lives under agentic-toolkit; "someone-else/validate" must
+    // not collide with it.
+    fillMetadata({ description: 'desc', name: 'validate', version: '1.0.0' });
+    fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'someone-else' } });
+    await flush();
+
+    expect(screen.queryByTestId('version-conflict-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('version-update-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).not.toBeDisabled();
+  });
+
+  it('still triggers the conflict panel when an org-scoped draft matches a same-org registry entry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    renderContribute('octo-login', { octokit });
+    fireEvent.click(screen.getByTestId('asset-type-agent'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('agent.md', '# Agent')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await flush();
+    await flush();
+    fillMetadata({ description: 'desc', name: 'validate', version: '1.0.0' });
+    fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'agentic-toolkit' } });
+    await flush();
+
+    expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).toBeDisabled();
+  });
+
+  it('still triggers the conflict panel when a global draft matches a global registry entry', async () => {
+    vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
+    const octokit = { rest: {} } as unknown as Octokit;
+    await advanceToMetadata(octokit);
+    fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.1.0' });
+    await flush();
+
+    expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-next')).toBeDisabled();
   });
 });
 
