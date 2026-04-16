@@ -9,6 +9,7 @@ import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionHeader } from '@/components/SectionHeader';
 import { Stepper, type StepperStep } from '@/components/Stepper';
+import { ConfirmDialog } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -117,6 +118,7 @@ interface WizardNavProps {
   isLast: boolean;
   onBack: () => void;
   onNext: () => void;
+  onReset: () => void;
   onSubmit: () => void;
   step: number;
   submitting?: boolean;
@@ -176,6 +178,7 @@ export function ContributeRoute() {
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
   const [registry, setRegistry] = useState<null | Registry>(null);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const hydratedRef = useRef(false);
   const skipNextPersistRef = useRef(false);
   const registryFetchStartedRef = useRef(false);
@@ -250,6 +253,17 @@ export function ContributeRoute() {
   };
   const next = () => goTo(draft.step + 1);
   const back = () => goTo(draft.step - 1);
+
+  const resetDraft = () => {
+    clearDraftFromStorage();
+    skipNextPersistRef.current = true;
+    setDraft(createInitialDraft(defaultAuthor));
+    toast.add({
+      description: 'The contribute form has been reset.',
+      priority: 'high',
+      title: 'Draft cleared',
+    });
+  };
 
   const onSubmit = async () => {
     const result = validateDraft(draft);
@@ -345,6 +359,7 @@ export function ContributeRoute() {
           isLast={draft.step === STEPS.length - 1}
           onBack={back}
           onNext={next}
+          onReset={() => setResetDialogOpen(true)}
           onSubmit={() => {
             void onSubmit();
           }}
@@ -352,6 +367,16 @@ export function ContributeRoute() {
           submitting={submitting}
         />
       </section>
+      <ConfirmDialog
+        cancelLabel='Cancel'
+        confirmLabel='Start over'
+        description='All entered draft data — type, files, metadata, and README — will be lost. This cannot be undone.'
+        onConfirm={resetDraft}
+        onOpenChange={setResetDialogOpen}
+        open={resetDialogOpen}
+        testId='reset-confirm'
+        title='Discard draft?'
+      />
     </>
   );
 }
@@ -1157,7 +1182,17 @@ async function walkFsEntry(entry: FileSystemEntry): Promise<FileEntry[]> {
   return collected;
 }
 
-function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, step, submitting }: WizardNavProps) {
+function WizardNav({
+  canProceed,
+  canSubmit,
+  isLast,
+  onBack,
+  onNext,
+  onReset,
+  onSubmit,
+  step,
+  submitting,
+}: WizardNavProps) {
   return (
     <div className='flex items-center justify-between gap-2 pt-2'>
       <Button
@@ -1169,15 +1204,27 @@ function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, st
       >
         Back
       </Button>
-      {isLast ? (
-        <Button data-testid='wizard-submit' disabled={!canSubmit} onClick={onSubmit} type='button'>
-          {submitting ? 'Submitting…' : 'Submit contribution'}
+      <div className='flex items-center gap-2'>
+        <Button
+          className='text-destructive hover:bg-destructive/10 hover:text-destructive'
+          data-testid='wizard-reset'
+          disabled={submitting}
+          onClick={onReset}
+          type='button'
+          variant='ghost'
+        >
+          Start over
         </Button>
-      ) : (
-        <Button data-testid='wizard-next' disabled={!canProceed} onClick={onNext} type='button'>
-          Next
-        </Button>
-      )}
+        {isLast ? (
+          <Button data-testid='wizard-submit' disabled={!canSubmit} onClick={onSubmit} type='button'>
+            {submitting ? 'Submitting…' : 'Submit contribution'}
+          </Button>
+        ) : (
+          <Button data-testid='wizard-next' disabled={!canProceed} onClick={onNext} type='button'>
+            Next
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

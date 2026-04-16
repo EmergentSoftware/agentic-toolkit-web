@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Toaster } from '@/components/Toaster';
 import * as publishServiceModule from '@/lib/publish-service';
 import * as registryClientModule from '@/lib/registry-client';
 import {
@@ -126,7 +127,12 @@ function renderContribute(
 }
 
 function ToastProviderStub({ children }: { children: React.ReactNode }) {
-  return <Toast.Provider>{children}</Toast.Provider>;
+  return (
+    <Toast.Provider>
+      {children}
+      <Toaster />
+    </Toast.Provider>
+  );
 }
 
 async function uploadFiles(files: File[]) {
@@ -548,5 +554,128 @@ describe('Contribute — version conflict detection', () => {
     fireEvent.change(screen.getByTestId('field-org'), { target: { value: 'agentic-toolkit' } });
     await flush();
     expect(screen.getByTestId('version-conflict-panel')).toBeInTheDocument();
+  });
+});
+
+describe('Contribute — Start over reset flow', () => {
+  it('renders a Start over button on every step and it is disabled while submitting', async () => {
+    renderContribute();
+    // Step 0 (type)
+    expect(screen.getByTestId('wizard-reset')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-reset')).not.toBeDisabled();
+
+    // Advance through each step and assert the button remains in the DOM.
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect(screen.getByTestId('wizard-reset')).toBeInTheDocument();
+
+    await uploadFiles([makeFile('skill.md')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect(screen.getByTestId('wizard-reset')).toBeInTheDocument();
+
+    fillMetadata({ description: 'desc', name: 'my-skill' });
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect(screen.getByTestId('wizard-reset')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('field-readme'), { target: { value: '# r' } });
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect(screen.getByTestId('wizard-reset')).toBeInTheDocument();
+  });
+
+  it('opens the confirmation dialog when Start over is clicked and does not clear draft yet', async () => {
+    renderContribute();
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    // Draft is now persisted.
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeTruthy();
+
+    expect(screen.queryByTestId('reset-confirm')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('wizard-reset'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reset-confirm')).toBeInTheDocument();
+    });
+    // Draft should still be present — confirmation not yet given.
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeTruthy();
+    // Step 0 still reflects prior selection.
+    expect(screen.getByTestId('asset-type-skill')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('closes the dialog on cancel and keeps the draft intact', async () => {
+    renderContribute();
+    fireEvent.click(screen.getByTestId('asset-type-rule'));
+    fireEvent.click(screen.getByTestId('wizard-reset'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reset-confirm')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('reset-confirm-cancel'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('reset-confirm')).not.toBeInTheDocument();
+    });
+
+    const stored = window.sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    expect(stored).toBeTruthy();
+    expect(JSON.parse(stored!)).toMatchObject({ type: 'rule' });
+  });
+
+  it('clears sessionStorage, resets in-memory state, and fires a toast on confirm', async () => {
+    renderContribute('octo-login');
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    await uploadFiles([makeFile('skill.md', '# Skill body')]);
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fillMetadata({ description: 'A description', name: 'an-asset' });
+
+    // Draft is on step 2 (metadata) with files loaded in memory and persisted.
+    expect((screen.getByTestId('field-name') as HTMLInputElement).value).toBe('an-asset');
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('wizard-reset'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reset-confirm')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('reset-confirm-confirm'));
+    });
+
+    // SessionStorage wiped.
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+    });
+
+    // Dialog closed.
+    expect(screen.queryByTestId('reset-confirm')).not.toBeInTheDocument();
+
+    // Back on step 0 with nothing selected.
+    expect(screen.getByText(/Step 1 — Asset type/)).toBeInTheDocument();
+    expect(screen.getByTestId('asset-type-skill')).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByTestId('wizard-next')).toBeDisabled();
+
+    // Toast surfaced.
+    await waitFor(() => {
+      const toasts = screen.getAllByTestId('toast-root');
+      expect(toasts.some((node) => node.textContent?.includes('Draft cleared'))).toBe(true);
+    });
+  });
+
+  it('does not re-persist the cleared draft to sessionStorage after confirm', async () => {
+    renderContribute();
+    fireEvent.click(screen.getByTestId('asset-type-hook'));
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('wizard-reset'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reset-confirm')).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('reset-confirm-confirm'));
+    });
+
+    // Let React flush any pending persist effects.
+    await flush();
+    await flush();
+
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
   });
 });
