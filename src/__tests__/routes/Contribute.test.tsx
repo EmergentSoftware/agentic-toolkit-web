@@ -18,6 +18,17 @@ import {
 
 import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
+interface FakeDirTree {
+  [path: string]: FakeDirTree | File;
+}
+
+async function dropFolder(rootName: string, tree: FakeDirTree) {
+  const zone = screen.getByTestId('file-dropzone');
+  fireEvent.drop(zone, { dataTransfer: makeDropDataTransfer(rootName, tree) });
+  await flush();
+  await flush();
+}
+
 function fillMetadata(overrides: Partial<Record<'author' | 'description' | 'name' | 'version', string>> = {}) {
   fireEvent.change(screen.getByTestId('field-name'), {
     target: { value: overrides.name ?? 'my-asset' },
@@ -38,6 +49,54 @@ async function flush() {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+function makeDropDataTransfer(rootName: string, tree: FakeDirTree): DataTransfer {
+  const rootEntry = makeFakeEntry(rootName, `/${rootName}`, tree);
+  const item = {
+    kind: 'file',
+    type: '',
+    webkitGetAsEntry: () => rootEntry,
+  } as unknown as DataTransferItem;
+  return {
+    files: [] as unknown as FileList,
+    items: [item] as unknown as DataTransferItemList,
+    types: ['Files'],
+  } as unknown as DataTransfer;
+}
+
+function makeFakeEntry(name: string, fullPath: string, node: FakeDirTree | File): FileSystemEntry {
+  if (node instanceof File) {
+    return {
+      file: (cb: (f: File) => void) => cb(node),
+      fullPath,
+      isDirectory: false,
+      isFile: true,
+      name,
+    } as unknown as FileSystemEntry;
+  }
+  const childKeys = Object.keys(node);
+  let readCount = 0;
+  return {
+    createReader: () => ({
+      readEntries: (cb: (entries: FileSystemEntry[]) => void) => {
+        if (readCount > 0) {
+          cb([]);
+          return;
+        }
+        readCount++;
+        cb(
+          childKeys.map((key) =>
+            makeFakeEntry(key, `${fullPath}/${key}`, node[key]!),
+          ),
+        );
+      },
+    }),
+    fullPath,
+    isDirectory: true,
+    isFile: false,
+    name,
+  } as unknown as FileSystemEntry;
 }
 
 function makeFile(name: string, content = '# content') {
@@ -254,6 +313,33 @@ describe('Contribute — wizard UI', () => {
     expect((screen.getByTestId('field-version') as HTMLInputElement).value).toBe('2.3.4');
     expect((screen.getByTestId('field-author') as HTMLInputElement).value).toBe('alice');
     expect(screen.getByTestId('tag-list')).toHaveTextContent('imported');
+  });
+
+  it('accepts a folder drop by traversing webkitGetAsEntry', async () => {
+    renderContribute();
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    const manifestJson = JSON.stringify({
+      author: 'bob',
+      description: 'Dropped desc',
+      name: 'dropped-skill',
+      type: 'skill',
+      version: '1.2.3',
+    });
+    await dropFolder('my-skill', {
+      'manifest.json': new File([manifestJson], 'manifest.json', { type: 'application/json' }),
+      nested: {
+        'helper.md': new File(['# helper'], 'helper.md', { type: 'text/markdown' }),
+      },
+      'skill.md': new File(['# skill body'], 'skill.md', { type: 'text/markdown' }),
+    });
+    const fileList = screen.getByTestId('files-list');
+    expect(fileList).toHaveTextContent('manifest.json');
+    expect(fileList).toHaveTextContent('skill.md');
+    expect(fileList).toHaveTextContent('nested/helper.md');
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect((screen.getByTestId('field-name') as HTMLInputElement).value).toBe('dropped-skill');
+    expect((screen.getByTestId('field-version') as HTMLInputElement).value).toBe('1.2.3');
   });
 
   it('seeds the README editor when a README.md is uploaded', async () => {

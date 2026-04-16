@@ -434,6 +434,21 @@ function pickEntrypoint(draft: DraftState): string | undefined {
   return draft.files[0]?.path;
 }
 
+async function readDropEntries(dataTransfer: DataTransfer): Promise<FileEntry[]> {
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  const roots = items
+    .filter((item) => item.kind === 'file')
+    .map((item) => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
+    .filter((entry): entry is FileSystemEntry => entry !== null);
+  if (roots.length === 0) return readFileList(dataTransfer.files);
+  const entries: FileEntry[] = [];
+  for (const root of roots) {
+    const walked = await walkFsEntry(root);
+    entries.push(...walked);
+  }
+  return stripCommonRoot(entries);
+}
+
 async function readFileList(fileList: FileList): Promise<FileEntry[]> {
   const entries: FileEntry[] = [];
   for (const file of Array.from(fileList)) {
@@ -449,27 +464,40 @@ function StepFiles({ draft, onChange }: StepProps) {
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<null | string>(null);
 
+  const applyIncomingEntries = (entries: FileEntry[]) => {
+    if (entries.length === 0) return;
+    const merged = mergeFiles(draft.files, entries);
+    onChange('files', merged);
+    const readmeContent = extractReadme(entries);
+    if (readmeContent && !draft.readme) onChange('readme', readmeContent);
+    const prefill = extractManifest(entries);
+    if (prefill) {
+      if (prefill.type) onChange('type', prefill.type);
+      if (prefill.name) onChange('name', prefill.name);
+      if (prefill.description) onChange('description', prefill.description);
+      if (prefill.author) onChange('author', prefill.author);
+      if (prefill.version) onChange('version', prefill.version);
+      if (prefill.org) onChange('org', prefill.org);
+      if (prefill.tags) onChange('tags', prefill.tags);
+    }
+  };
+
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     setError(null);
     try {
-      const entries = await readFileList(fileList);
-      const merged = mergeFiles(draft.files, entries);
-      onChange('files', merged);
-      const readmeContent = extractReadme(entries);
-      if (readmeContent && !draft.readme) onChange('readme', readmeContent);
-      const prefill = extractManifest(entries);
-      if (prefill) {
-        if (prefill.type) onChange('type', prefill.type);
-        if (prefill.name) onChange('name', prefill.name);
-        if (prefill.description) onChange('description', prefill.description);
-        if (prefill.author) onChange('author', prefill.author);
-        if (prefill.version) onChange('version', prefill.version);
-        if (prefill.org) onChange('org', prefill.org);
-        if (prefill.tags) onChange('tags', prefill.tags);
-      }
+      applyIncomingEntries(await readFileList(fileList));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to read selected files');
+    }
+  };
+
+  const handleDrop = async (dataTransfer: DataTransfer) => {
+    setError(null);
+    try {
+      applyIncomingEntries(await readDropEntries(dataTransfer));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to read dropped files');
     }
   };
 
@@ -542,7 +570,7 @@ function StepFiles({ draft, onChange }: StepProps) {
           onDrop={(event) => {
             event.preventDefault();
             setDragActive(false);
-            void handleFiles(event.dataTransfer.files);
+            void handleDrop(event.dataTransfer);
           }}
         >
           <p className='text-sm text-muted-foreground'>Drop files here, or use one of the buttons below.</p>
@@ -958,6 +986,31 @@ function stripCommonRoot(files: FileEntry[]): FileEntry[] {
   return files
     .map((f) => ({ ...f, path: f.path.slice(prefix.length) }))
     .filter((f) => f.path.length > 0);
+}
+
+async function walkFsEntry(entry: FileSystemEntry): Promise<FileEntry[]> {
+  if (entry.isFile) {
+    const fileEntry = entry as FileSystemFileEntry;
+    const file = await new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
+    const relPath = entry.fullPath.replace(/^\//, '') || file.name;
+    const content = await file.text();
+    return [{ content, path: relPath, size: file.size }];
+  }
+  const dirEntry = entry as FileSystemDirectoryEntry;
+  const reader = dirEntry.createReader();
+  const collected: FileEntry[] = [];
+  // readEntries returns batches; loop until the reader signals completion with an empty batch.
+  for (;;) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+      reader.readEntries(resolve, reject),
+    );
+    if (batch.length === 0) break;
+    for (const child of batch) {
+      const childEntries = await walkFsEntry(child);
+      collected.push(...childEntries);
+    }
+  }
+  return collected;
 }
 
 function WizardNav({ canProceed, canSubmit, isLast, onBack, onNext, onSubmit, step, submitting }: WizardNavProps) {
