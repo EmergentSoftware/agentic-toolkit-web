@@ -788,7 +788,7 @@ function StepMetadata({ draft, onChange }: StepProps) {
         </div>
         <div className='space-y-1.5'>
           <Label htmlFor='contrib-description'>Short description</Label>
-          <Input
+          <Textarea
             data-testid='field-description'
             id='contrib-description'
             onChange={(event) => onChange('description', event.target.value)}
