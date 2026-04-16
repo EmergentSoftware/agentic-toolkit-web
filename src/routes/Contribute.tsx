@@ -792,7 +792,7 @@ function StepMetadata({ draft, onChange }: StepProps) {
             data-testid='field-description'
             id='contrib-description'
             onChange={(event) => onChange('description', event.target.value)}
-            placeholder='One-line summary of what this asset does'
+            placeholder='Short summary of what this asset does'
             value={draft.description}
           />
         </div>
