@@ -13,7 +13,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
@@ -797,24 +796,6 @@ function StepMetadata({ draft, onChange }: StepProps) {
               ))}
             </div>
           ) : null}
-        </div>
-        <div className='space-y-1.5'>
-          <Label htmlFor='contrib-type-readonly'>Asset type</Label>
-          <Select
-            data-testid='field-type'
-            id='contrib-type-readonly'
-            onChange={(event) => onChange('type', event.target.value as AssetType)}
-            value={draft.type}
-          >
-            <option disabled value=''>
-              Select type…
-            </option>
-            {ASSET_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </Select>
         </div>
       </CardContent>
     </Card>
