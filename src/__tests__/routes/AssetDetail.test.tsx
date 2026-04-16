@@ -16,11 +16,19 @@ const useAssetReadmeMock = vi.hoisted(() => vi.fn());
 const useDownloadAssetMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
 );
+const useManifestGraphMock = vi.hoisted(() =>
+  vi.fn(() => ({ error: null, isLoading: false, manifests: new Map(), order: [] })),
+);
 const useRegistryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/useAssetManifest', () => ({ useAssetManifest: useAssetManifestMock }));
 vi.mock('@/hooks/useAssetReadme', () => ({ useAssetReadme: useAssetReadmeMock }));
 vi.mock('@/hooks/useDownloadAsset', () => ({ useDownloadAsset: useDownloadAssetMock }));
+vi.mock('@/hooks/useManifestGraph', () => ({
+  refKey: (ref: { name: string; org?: string; type: string; version: string }) =>
+    `${ref.type}:${ref.org ?? ''}:${ref.name}:${ref.version}`,
+  useManifestGraph: useManifestGraphMock,
+}));
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 
 type ManifestQueryShape = Partial<UseQueryResult<Manifest, Error>>;

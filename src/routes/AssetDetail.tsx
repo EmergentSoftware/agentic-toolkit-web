@@ -1,12 +1,13 @@
 import { Popover } from '@base-ui-components/react/popover';
 import { ChevronDown } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { rcompare as semverRcompare } from 'semver';
 
 import type { AssetType, Manifest, RegistryAsset } from '@/lib/schemas';
 
 import { EmptyState } from '@/components/EmptyState';
+import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
@@ -16,7 +17,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAssetManifest } from '@/hooks/useAssetManifest';
 import { useAssetReadme } from '@/hooks/useAssetReadme';
 import { useDownloadAsset } from '@/hooks/useDownloadAsset';
+import { useManifestGraph } from '@/hooks/useManifestGraph';
 import { useRegistry } from '@/hooks/useRegistry';
+import { listAssetFiles } from '@/lib/file-list';
+import { type AssetManifestRef } from '@/lib/registry-client';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +46,12 @@ export function AssetDetailRoute() {
   const readmeQuery = useAssetReadme(ref);
   const registryQuery = useRegistry();
   const { download, isDownloading } = useDownloadAsset();
+
+  const depRefs = useMemo(
+    () => collectDirectDepRefs(manifestQuery.data),
+    [manifestQuery.data],
+  );
+  const depGraph = useManifestGraph(depRefs);
 
   const registryAsset = findRegistryAsset(registryQuery.data?.assets, assetType, name, org);
 
@@ -211,6 +221,13 @@ export function AssetDetailRoute() {
         </CardContent>
       </Card>
 
+      <FilesCard
+        error={depGraph.error}
+        groups={buildAssetFileGroups(manifest, depGraph.manifests, depGraph.order)}
+        isLoading={depGraph.isLoading}
+        testId='asset-detail-files'
+      />
+
       <section aria-label='Asset README' data-testid='asset-detail-readme'>
         <h2 className='mb-3 text-lg font-semibold tracking-tight text-foreground'>README</h2>
         <ReadmeView
@@ -245,6 +262,41 @@ function BackToBrowseLink() {
       Back to Browse
     </Link>
   );
+}
+
+function buildAssetFileGroups(
+  manifest: Manifest,
+  depManifests: Map<string, Manifest>,
+  order: string[],
+): FileGroup[] {
+  const groups: FileGroup[] = [
+    {
+      files: listAssetFiles(manifest),
+      name: manifest.name,
+      testId: `files-group-${manifest.name}`,
+    },
+  ];
+  for (const key of order) {
+    const dep = depManifests.get(key);
+    if (!dep) continue;
+    groups.push({
+      files: listAssetFiles(dep),
+      name: dep.name,
+      testId: `files-group-${dep.name}-${dep.version}`,
+      version: dep.version,
+    });
+  }
+  return groups;
+}
+
+function collectDirectDepRefs(manifest: Manifest | undefined): AssetManifestRef[] {
+  if (!manifest?.dependencies) return [];
+  const refs: AssetManifestRef[] = [];
+  for (const dep of manifest.dependencies) {
+    if (!dep.version) continue;
+    refs.push({ name: dep.name, type: dep.type, version: dep.version });
+  }
+  return refs;
 }
 
 function DownloadButton({

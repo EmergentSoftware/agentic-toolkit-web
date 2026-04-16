@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import type { BundleAssetRef } from './schemas/bundle';
 
 import { fetchWithRetry, type RetryOptions } from './fetch-retry';
+import { collectFilePaths } from './file-list';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
 import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 
@@ -157,15 +158,6 @@ function buildFileUrl(ref: AssetRef, relativePath: string, options: DownloadAsse
   for (const segment of relativePath.split('/')) parts.push(encodePathSegment(segment));
   const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${parts.join('/')}`;
   return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
-}
-
-function collectFilePaths(manifest: Manifest): string[] {
-  const paths = new Set<string>();
-  if (manifest.entrypoint) paths.add(manifest.entrypoint);
-  paths.add('README.md');
-  if (manifest.files) for (const p of manifest.files) paths.add(p);
-  paths.delete('manifest.json');
-  return [...paths];
 }
 
 function decodeBase64(encoded: string): Uint8Array {

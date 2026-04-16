@@ -18,10 +18,18 @@ const useRegistryMock = vi.hoisted(() => vi.fn());
 const useDownloadBundleMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
 );
+const useManifestGraphMock = vi.hoisted(() =>
+  vi.fn(() => ({ error: null, isLoading: false, manifests: new Map(), order: [] })),
+);
 
 vi.mock('@/hooks/useBundleManifest', () => ({ useBundleManifest: useBundleManifestMock }));
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 vi.mock('@/hooks/useDownloadBundle', () => ({ useDownloadBundle: useDownloadBundleMock }));
+vi.mock('@/hooks/useManifestGraph', () => ({
+  refKey: (ref: { name: string; org?: string; type: string; version: string }) =>
+    `${ref.type}:${ref.org ?? ''}:${ref.name}:${ref.version}`,
+  useManifestGraph: useManifestGraphMock,
+}));
 
 type BundleQueryShape = Partial<UseQueryResult<Bundle, Error>>;
 type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;

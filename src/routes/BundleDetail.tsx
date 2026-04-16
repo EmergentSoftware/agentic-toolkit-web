@@ -1,9 +1,11 @@
 import { useCallback, useMemo } from 'react';
 import { Link, useParams } from 'react-router';
 
+import type { Bundle, Manifest } from '@/lib/schemas';
 import type { BundleAssetRef } from '@/lib/schemas/bundle';
 
 import { EmptyState } from '@/components/EmptyState';
+import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
@@ -12,7 +14,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useBundleManifest } from '@/hooks/useBundleManifest';
 import { useDownloadBundle } from '@/hooks/useDownloadBundle';
+import { refKey as manifestRefKey, useManifestGraph } from '@/hooks/useManifestGraph';
 import { useRegistry } from '@/hooks/useRegistry';
+import { listAssetFiles } from '@/lib/file-list';
+import { type AssetManifestRef } from '@/lib/registry-client';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 
 export function BundleDetailRoute() {
@@ -42,6 +47,16 @@ export function BundleDetailRoute() {
     }
     return map;
   }, [manifestQuery.data, resolveVersion]);
+
+  const memberRefs = useMemo(
+    () => collectMemberRefs(manifestQuery.data, memberVersions),
+    [manifestQuery.data, memberVersions],
+  );
+  const memberKeys = useMemo(
+    () => new Set(memberRefs.map((ref) => manifestRefKey(ref))),
+    [memberRefs],
+  );
+  const manifestGraph = useManifestGraph(memberRefs);
 
   if (!bundleId) {
     return (
@@ -129,6 +144,13 @@ export function BundleDetailRoute() {
         </CardContent>
       </Card>
 
+      <FilesCard
+        error={manifestGraph.error}
+        groups={buildBundleFileGroups(manifest, memberRefs, memberKeys, manifestGraph.manifests, manifestGraph.order)}
+        isLoading={manifestGraph.isLoading}
+        testId='bundle-detail-files'
+      />
+
       <section aria-label='Bundle assets' data-testid='bundle-detail-assets'>
         <h2 className='mb-3 text-lg font-semibold tracking-tight text-foreground'>Assets</h2>
         <ul className='grid gap-3 sm:grid-cols-2'>
@@ -162,6 +184,42 @@ function BackToBundlesLink() {
       Back to Bundles
     </Link>
   );
+}
+
+function buildBundleFileGroups(
+  bundle: Bundle,
+  memberRefs: AssetManifestRef[],
+  memberKeys: Set<string>,
+  manifests: Map<string, Manifest>,
+  order: string[],
+): FileGroup[] {
+  const primaryFiles: string[] = ['bundle.json'];
+  for (const ref of memberRefs) {
+    const member = manifests.get(manifestRefKey(ref));
+    if (!member) continue;
+    for (const path of listAssetFiles(member)) {
+      primaryFiles.push(`${member.name}/${path}`);
+    }
+  }
+  const groups: FileGroup[] = [
+    {
+      files: primaryFiles,
+      name: bundle.name,
+      testId: `files-group-${bundle.name}`,
+    },
+  ];
+  for (const key of order) {
+    if (memberKeys.has(key)) continue;
+    const dep = manifests.get(key);
+    if (!dep) continue;
+    groups.push({
+      files: listAssetFiles(dep),
+      name: dep.name,
+      testId: `files-group-${dep.name}-${dep.version}`,
+      version: dep.version,
+    });
+  }
+  return groups;
 }
 
 function BundleMemberCard({
@@ -215,6 +273,20 @@ function BundleNotFound() {
       />
     </>
   );
+}
+
+function collectMemberRefs(
+  bundle: Bundle | undefined,
+  memberVersions: Map<string, string | undefined>,
+): AssetManifestRef[] {
+  if (!bundle) return [];
+  const refs: AssetManifestRef[] = [];
+  for (const member of bundle.assets) {
+    const version = memberVersions.get(memberKey(member));
+    if (!version) continue;
+    refs.push({ name: member.name, org: member.org, type: member.type, version });
+  }
+  return refs;
 }
 
 function DownloadButton({

@@ -70,53 +70,6 @@
 			"name": "emergent-brand",
 			"type": "skill",
 			"version": "1.1.0"
-		},
-		{
-			"dependencies": [],
-			"description": "SQL Server T-SQL best practices for database design, naming, data types, code patterns, and formatting. Use when creating, reviewing, or modifying any SQL Server database objects (.sql files) including tables, stored procedures, functions, views, indexes, or writing T-SQL queries. Also use when reviewing database schemas or making data model decisions.",
-			"files": [
-				{
-					"checksum": "781f6182536b7d76335c9755b13bbe5c952e0d888ca0d869145baa1180a3f2a4",
-					"sourcePath": "SKILL.md"
-				},
-				{
-					"checksum": "ae76533250013cac17407e5f472526aa3de4c7a65111d72281fe080e46d6171a",
-					"sourcePath": "references/data-conventions.md"
-				},
-				{
-					"checksum": "1fe06274f32d97686f15dbc3b8625e8c4fd55273b2790ea104b9d03c61a9d238",
-					"sourcePath": "references/data-type-conventions.md"
-				},
-				{
-					"checksum": "38b8ee9715050f1521e296f7b04ab6298e3edb7dc09eec8cef9492fc932526b0",
-					"sourcePath": "references/environment-conventions.md"
-				},
-				{
-					"checksum": "4ee86866eec0f85a92c4471c1786ee8dc3ae7f2087086464ca190797a563d29d",
-					"sourcePath": "references/formatting-examples.sql"
-				},
-				{
-					"checksum": "a1b360328b78043856ba1c96cf06063d2c96f3f75187f7ba0b8ae7b5768c2db5",
-					"sourcePath": "references/formatting-rules.md"
-				},
-				{
-					"checksum": "9d7b05cff55949959f23e546fafdf3d693b5d4418f8bb13ce2dc80a9045a2983",
-					"sourcePath": "references/naming-conventions.md"
-				},
-				{
-					"checksum": "b4861d98f3c428940a9d8c30f515a222d050a22279d3c22b38c1894f2dfac1c7",
-					"sourcePath": "references/sql-code-conventions.md"
-				},
-				{
-					"checksum": "487d84d155de5cf32908d10e15b5cffde64a7cf4179ddbafdbf1c70f006c69ad",
-					"sourcePath": "references/table-conventions.md"
-				}
-			],
-			"installedAt": "2026-04-15T19:14:33.333Z",
-			"installReason": "direct",
-			"name": "transactional-sql",
-			"type": "skill",
-			"version": "1.0.1"
 		}
 	],
 	"lockVersion": 1,
