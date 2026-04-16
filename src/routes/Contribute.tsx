@@ -1014,7 +1014,7 @@ function StepType({ draft, onChange }: StepProps) {
                 tabIndex={selected || draft.type === '' ? 0 : -1}
                 type='button'
               >
-                <span className='text-sm font-semibold'>{type}</span>
+                <span className='text-sm font-semibold capitalize'>{type}</span>
                 <span className='text-xs text-muted-foreground'>{describeType(type)}</span>
               </button>
             );
