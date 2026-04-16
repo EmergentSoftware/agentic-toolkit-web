@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-export type LayoutWidth = 'full' | 'standard';
+export type LayoutWidth = 'full' | 'standard' | 'wide';
 
 interface LayoutWidthContextValue {
   setWidth: (width: LayoutWidth) => void;
@@ -20,6 +20,15 @@ export function useFullWidthLayout(): void {
   useEffect(() => {
     if (!ctx) return;
     ctx.setWidth('full');
+    return () => ctx.setWidth('standard');
+  }, [ctx]);
+}
+
+export function useWideLayout(): void {
+  const ctx = useContext(LayoutWidthContext);
+  useEffect(() => {
+    if (!ctx) return;
+    ctx.setWidth('wide');
     return () => ctx.setWidth('standard');
   }, [ctx]);
 }

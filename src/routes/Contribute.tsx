@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useWideLayout } from '@/components/layout/LayoutWidthContext';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
 import { PublishError } from '@/lib/publish-errors';
@@ -165,6 +166,7 @@ export function computeVersionConflict(
 }
 
 export function ContributeRoute() {
+  useWideLayout();
   const { octokit, user } = useSession();
   const toast = useToast();
   const navigate = useNavigate();
