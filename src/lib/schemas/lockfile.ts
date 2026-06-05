@@ -4,6 +4,10 @@ import { AssetType } from './manifest';
 
 export const InstalledFile = z.object({
   checksum: z.string().describe('SHA-256 checksum of the file contents'),
+  installedPath: z
+    .string()
+    .optional()
+    .describe('Project-relative POSIX path to where the file was installed (computed via adapter for legacy entries)'),
   sourcePath: z.string().describe('Original path within the asset directory'),
 });
 export type InstalledFile = z.infer<typeof InstalledFile>;

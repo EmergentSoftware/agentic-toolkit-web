@@ -5,6 +5,7 @@ import { AssetType } from './manifest';
 export const ConfigSchema = z.object({
   cacheDir: z.string().optional().describe('Override cache directory (defaults to ~/.atk/cache/)'),
   cacheTtlMinutes: z.number().optional().describe('Cache TTL in minutes for registry data'),
+  checkUpdates: z.boolean().optional().describe('Show banner when a newer ATK version is available'),
   githubToken: z.string().optional().describe('GitHub token override (defaults to gh auth token)'),
   org: z.string().optional().describe('Default organization scope for asset resolution'),
   registryBranch: z.string().optional().describe('Override registry branch for GitHub API calls (defaults to main)'),
@@ -14,6 +15,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 
 export const DEFAULT_CONFIG: Config = {
   cacheTtlMinutes: 5,
+  checkUpdates: true,
 };
 
 const ProjectConfigBase = z.object({

@@ -135,10 +135,7 @@ const FULL_MANIFEST: Manifest = {
     reviewedBy: 'security-team',
   },
   tags: ['quality', 'ci'],
-  tools: [
-    { maxVersion: '2.0.0', minVersion: '1.0.0', notes: 'Primary target.', tool: 'claude-code' },
-    { tool: 'cursor' },
-  ],
+  tools: ['claude-code', 'cursor'],
   type: 'agent',
   version: '1.1.0',
 };
@@ -198,9 +195,6 @@ describe('AssetDetailRoute', () => {
 
     const tools = screen.getByTestId('tool-compatibility');
     expect(within(tools).getByText('claude-code')).toBeInTheDocument();
-    expect(within(tools).getByText(/min: 1\.0\.0/)).toBeInTheDocument();
-    expect(within(tools).getByText(/max: 2\.0\.0/)).toBeInTheDocument();
-    expect(within(tools).getByText('Primary target.')).toBeInTheDocument();
     expect(within(tools).getByText('cursor')).toBeInTheDocument();
 
     const security = screen.getByTestId('security-block');

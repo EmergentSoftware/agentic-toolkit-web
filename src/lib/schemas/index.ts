@@ -6,14 +6,7 @@ export { type Config, ConfigSchema, DEFAULT_CONFIG, type ProjectConfig, ProjectC
 
 export { ConfigEntry, InstalledAsset, InstalledFile, type Lockfile, LockfileSchema } from './lockfile';
 
-export {
-  AssetDependency,
-  AssetType,
-  type Manifest,
-  ManifestSchema,
-  SecurityBlock,
-  ToolCompatibility,
-} from './manifest';
+export { AssetDependency, AssetType, type Manifest, ManifestSchema, SecurityBlock } from './manifest';
 
 export {
   DeprecatedEntry,

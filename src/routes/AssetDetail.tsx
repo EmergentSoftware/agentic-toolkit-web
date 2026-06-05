@@ -180,21 +180,10 @@ export function AssetDetailRoute() {
 
           {manifest.tools && manifest.tools.length > 0 ? (
             <MetadataRow label='Tool compatibility'>
-              <ul className='flex flex-col gap-2' data-testid='tool-compatibility'>
+              <ul className='flex flex-wrap gap-2' data-testid='tool-compatibility'>
                 {manifest.tools.map((tool) => (
-                  <li className='rounded-md border border-border p-3' key={tool.tool}>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <Badge variant='outline'>{tool.tool}</Badge>
-                      {tool.minVersion ? (
-                        <span className='text-xs text-muted-foreground'>min: {tool.minVersion}</span>
-                      ) : null}
-                      {tool.maxVersion ? (
-                        <span className='text-xs text-muted-foreground'>max: {tool.maxVersion}</span>
-                      ) : null}
-                    </div>
-                    {tool.notes ? (
-                      <p className='mt-2 text-xs text-muted-foreground'>{tool.notes}</p>
-                    ) : null}
+                  <li key={tool}>
+                    <Badge variant='outline'>{tool}</Badge>
                   </li>
                 ))}
               </ul>

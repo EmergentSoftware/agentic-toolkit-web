@@ -44,7 +44,7 @@ function baseManifest(): Manifest {
     entrypoint: 'skill.md',
     name: 'my-skill',
     tags: ['test'],
-    tools: [{ tool: 'claude-code' }],
+    tools: ['claude-code'],
     type: 'skill',
     version: '1.0.0',
   } as Manifest;

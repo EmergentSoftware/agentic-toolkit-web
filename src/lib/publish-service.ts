@@ -381,7 +381,7 @@ function generatePrBody(params: { listedFiles: string[]; manifest: Manifest }): 
   lines.push('### Tool Compatibility');
   lines.push('');
   if (manifest.tools && manifest.tools.length > 0) {
-    for (const tool of manifest.tools) lines.push(`- ${tool.tool}`);
+    for (const tool of manifest.tools) lines.push(`- ${tool}`);
   } else {
     lines.push('none');
   }

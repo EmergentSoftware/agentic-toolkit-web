@@ -4,14 +4,6 @@ import { z } from 'zod';
 export const AssetType = z.enum(['skill', 'agent', 'rule', 'hook', 'memory-template', 'mcp-config']);
 export type AssetType = z.infer<typeof AssetType>;
 
-export const ToolCompatibility = z.object({
-  maxVersion: z.string().optional().describe('Maximum compatible tool version'),
-  minVersion: z.string().optional().describe('Minimum compatible tool version'),
-  notes: z.string().optional().describe('Compatibility notes'),
-  tool: z.string().describe('Tool identifier (e.g., claude-code)'),
-});
-export type ToolCompatibility = z.infer<typeof ToolCompatibility>;
-
 export const AssetDependency = z.object({
   name: z.string().describe('Dependency asset name'),
   type: AssetType.describe('Dependency asset type'),
@@ -26,14 +18,17 @@ export const SecurityBlock = z.object({
 });
 export type SecurityBlock = z.infer<typeof SecurityBlock>;
 
-export const ManifestSchema = z
+const ManifestBase = z
   .object({
     $schema: z.string().optional().describe('JSON Schema reference for editor validation and autocomplete'),
     author: z.string().describe('Author name or identifier'),
     dependencies: z.array(AssetDependency).optional().describe('Other assets this asset depends on'),
     description: z.string().describe('Short description of what this asset does'),
     entrypoint: z.string().optional().describe('Primary file for this asset (relative to asset directory)'),
-    files: z.array(z.string()).optional().describe('Additional files included with this asset (relative paths)'),
+    files: z
+      .union([z.literal('auto'), z.array(z.string())])
+      .optional()
+      .describe('Additional files included with this asset (relative paths), or "auto" to glob the asset directory'),
     metadata: z.record(z.string(), z.unknown()).optional().describe('Arbitrary additional metadata'),
     name: z.string().describe('Unique asset name (kebab-case)'),
     org: z
@@ -43,7 +38,7 @@ export const ManifestSchema = z
       .describe('Organization scope for this asset'),
     security: SecurityBlock.optional().describe('Security review information'),
     tags: z.array(z.string()).optional().describe('Searchable tags'),
-    tools: z.array(ToolCompatibility).optional().describe('Tool compatibility information'),
+    tools: z.array(z.string()).optional().describe('Compatible tool identifiers'),
     type: AssetType.describe('Asset type'),
     version: z
       .string()
@@ -56,4 +51,19 @@ export const ManifestSchema = z
     message: 'entrypoint is required for all asset types except mcp-config',
     path: ['entrypoint'],
   });
-export type Manifest = z.infer<typeof ManifestSchema>;
+
+export const ManifestSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object' && 'tools' in val) {
+    const obj = val as Record<string, unknown>;
+    if (Array.isArray(obj.tools) && obj.tools.length > 0 && typeof obj.tools[0] === 'object') {
+      return {
+        ...obj,
+        tools: obj.tools.map((t) =>
+          typeof t === 'object' && t !== null && 'tool' in t ? (t as { tool: string }).tool : t,
+        ),
+      };
+    }
+  }
+  return val;
+}, ManifestBase);
+export type Manifest = z.infer<typeof ManifestBase>;
