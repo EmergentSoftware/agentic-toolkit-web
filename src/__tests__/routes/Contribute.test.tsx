@@ -2,6 +2,7 @@ import type { Octokit } from '@octokit/rest';
 
 import { Toast } from '@base-ui-components/react/toast';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import JSZip from 'jszip';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -104,6 +105,16 @@ function makeFakeEntry(name: string, fullPath: string, node: FakeDirTree | File)
 
 function makeFile(name: string, content = '# content') {
   return new File([content], name, { type: 'text/markdown' });
+}
+
+async function makeSkillFile(
+  name: string,
+  entries: Record<string, string | Uint8Array>,
+): Promise<File> {
+  const zip = new JSZip();
+  for (const [path, content] of Object.entries(entries)) zip.file(path, content);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  return new File([blob], name, { type: 'application/zip' });
 }
 
 function renderContribute(
@@ -321,6 +332,39 @@ describe('Contribute — wizard UI', () => {
     expect((screen.getByTestId('field-version') as HTMLInputElement).value).toBe('2.3.4');
     expect((screen.getByTestId('field-author') as HTMLInputElement).value).toBe('alice');
     expect(screen.getByTestId('tag-list')).toHaveTextContent('imported');
+  });
+
+  it('unpacks a dropped .skill archive and prefills name/description from frontmatter', async () => {
+    renderContribute();
+    fireEvent.click(screen.getByTestId('asset-type-skill'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    const skillMd = [
+      '---',
+      'name: emergent-qa-refinement',
+      'description: >',
+      '  Refines QA test cases',
+      '  into a structured plan.',
+      '---',
+      '# Emergent QA Refinement',
+    ].join('\n');
+    const archive = await makeSkillFile('emergent-qa-refinement.skill', {
+      'emergent-qa-refinement/SKILL.md': skillMd,
+    });
+    await uploadFiles([archive]);
+
+    // Root folder stripped; the archive itself is never added as a file.
+    await waitFor(() => {
+      expect(screen.getByTestId('files-list')).toHaveTextContent('SKILL.md');
+    });
+    expect(screen.getByTestId('files-list')).not.toHaveTextContent('.skill');
+
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect((screen.getByTestId('field-name') as HTMLInputElement).value).toBe(
+      'emergent-qa-refinement',
+    );
+    expect((screen.getByTestId('field-description') as HTMLInputElement).value).toBe(
+      'Refines QA test cases into a structured plan.',
+    );
   });
 
   it('accepts a folder drop by traversing webkitGetAsEntry', async () => {

@@ -18,11 +18,20 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
+import {
+  basename,
+  type FileEntry,
+  fileToFileEntry,
+  isBinaryEntry,
+  stripCommonRoot,
+} from '@/lib/file-entry';
+import { parseFrontmatter } from '@/lib/frontmatter';
 import { PublishError } from '@/lib/publish-errors';
 import { publishContribution, type PublishProgressEvent } from '@/lib/publish-service';
 import { fetchRegistry, findExistingAsset } from '@/lib/registry-client';
 import { AssetType, type Manifest, ManifestSchema } from '@/lib/schemas/manifest';
 import { type Registry } from '@/lib/schemas/registry';
+import { extractSkillArchive, hasSkillExtension } from '@/lib/skill-archive';
 import { type BumpType, bumpVersion } from '@/lib/version-utils';
 
 export const DRAFT_STORAGE_KEY = 'atk:contribute:draft';
@@ -42,11 +51,7 @@ export interface DraftState {
   versionConflict: VersionConflictState;
 }
 
-export interface FileEntry {
-  content: string;
-  path: string;
-  size: number;
-}
+export type { FileEntry };
 
 export interface VersionConflictState {
   latestVersion?: string;
@@ -284,7 +289,7 @@ export function ContributeRoute() {
     try {
       const publishResult = await publishContribution({
         dryRun,
-        files: draft.files.map((f) => ({ content: f.content, path: f.path })),
+        files: draft.files.map((f) => ({ content: f.content, encoding: f.encoding, path: f.path })),
         manifest: result.data,
         octokit,
         onProgress: (event) => setProgress(event),
@@ -423,11 +428,6 @@ export function validateDraft(draft: DraftState): z.ZodSafeParseResult<Manifest>
   return ManifestSchema.safeParse(buildManifestInput(draft));
 }
 
-function basename(path: string): string {
-  const i = path.lastIndexOf('/');
-  return i === -1 ? path : path.slice(i + 1);
-}
-
 function describeType(type: AssetType): string {
   switch (type) {
     case 'agent':
@@ -448,7 +448,9 @@ function describeType(type: AssetType): string {
 }
 
 function extractManifest(files: FileEntry[]): Partial<DraftState> | undefined {
-  const manifestFile = files.find((f) => basename(f.path).toLowerCase() === 'manifest.json');
+  const manifestFile = files.find(
+    (f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'manifest.json',
+  );
   if (!manifestFile) return undefined;
   try {
     const parsed = JSON.parse(manifestFile.content) as Record<string, unknown>;
@@ -471,7 +473,9 @@ function extractManifest(files: FileEntry[]): Partial<DraftState> | undefined {
 }
 
 function extractReadme(files: FileEntry[]): string | undefined {
-  const readme = files.find((f) => basename(f.path).toLowerCase() === 'readme.md');
+  const readme = files.find(
+    (f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'readme.md',
+  );
   return readme?.content;
 }
 
@@ -543,8 +547,7 @@ async function readFileList(fileList: FileList): Promise<FileEntry[]> {
   for (const file of Array.from(fileList)) {
     const path =
       (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-    const content = await file.text();
-    entries.push({ content, path, size: file.size });
+    entries.push(await fileToFileEntry(file, path));
   }
   return stripCommonRoot(entries);
 }
@@ -571,8 +574,52 @@ function StepFiles({ draft, onChange }: StepProps) {
     }
   };
 
+  // Unpack a Claude desktop `.skill` export (a zip) into raw files, then run the
+  // normal publish flow. Skill-only — other asset types never have a `.skill`
+  // form. Pre-fills name/description from SKILL.md frontmatter when no
+  // manifest.json is bundled (the common case for desktop exports).
+  const handleSkillArchive = async (file: File) => {
+    setError(null);
+    try {
+      const entries = await extractSkillArchive(file);
+      if (entries.length === 0) {
+        setError('The .skill archive did not contain any files.');
+        return;
+      }
+      applyIncomingEntries(entries);
+      const hasManifest = entries.some(
+        (entry) => !isBinaryEntry(entry) && basename(entry.path).toLowerCase() === 'manifest.json',
+      );
+      if (!hasManifest) {
+        const skillDoc = entries.find(
+          (entry) => !isBinaryEntry(entry) && basename(entry.path).toLowerCase() === 'skill.md',
+        );
+        if (skillDoc) {
+          const frontmatter = parseFrontmatter(skillDoc.content);
+          if (frontmatter.name && !draft.name) onChange('name', frontmatter.name);
+          if (frontmatter.description && !draft.description) {
+            onChange('description', frontmatter.description);
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to read the .skill archive');
+    }
+  };
+
+  const pickSkillArchive = (fileList: FileList | null): File | null => {
+    if (draft.type !== 'skill' || !fileList || fileList.length !== 1) return null;
+    const file = fileList[0];
+    return hasSkillExtension(file.name) ? file : null;
+  };
+
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
+    const archive = pickSkillArchive(fileList);
+    if (archive) {
+      await handleSkillArchive(archive);
+      return;
+    }
     setError(null);
     try {
       applyIncomingEntries(await readFileList(fileList));
@@ -582,6 +629,11 @@ function StepFiles({ draft, onChange }: StepProps) {
   };
 
   const handleDrop = async (dataTransfer: DataTransfer) => {
+    const archive = pickSkillArchive(dataTransfer.files);
+    if (archive) {
+      await handleSkillArchive(archive);
+      return;
+    }
     setError(null);
     try {
       applyIncomingEntries(await readDropEntries(dataTransfer));
@@ -639,7 +691,11 @@ function StepFiles({ draft, onChange }: StepProps) {
       </CardHeader>
       <CardContent className='space-y-4'>
         <SectionHeader
-          description='Drag and drop files or a folder. Individual files and folders are both supported.'
+          description={
+            draft.type === 'skill'
+              ? 'Drag and drop files, a folder, or a .skill export from the Claude desktop app — it will be unpacked automatically.'
+              : 'Drag and drop files or a folder. Individual files and folders are both supported.'
+          }
           title='Upload asset files'
         />
         <div
@@ -714,6 +770,7 @@ function StepFiles({ draft, onChange }: StepProps) {
               <li className='flex items-center justify-between gap-3 px-3 py-2' key={file.path}>
                 <span className='truncate font-mono text-xs'>{file.path}</span>
                 <div className='flex items-center gap-2'>
+                  {isBinaryEntry(file) ? <Badge variant='outline'>binary</Badge> : null}
                   <Badge variant='secondary'>{formatSize(file.size)}</Badge>
                   <Button
                     aria-label={`Remove ${file.path}`}
@@ -983,7 +1040,10 @@ function StepReview({ draft, validation }: StepReviewProps) {
               {draft.files.map((file) => (
                 <li className='flex items-center justify-between gap-3 px-3 py-2' key={file.path}>
                   <span className='truncate font-mono text-xs'>{file.path}</span>
-                  <Badge variant='secondary'>{formatSize(file.size)}</Badge>
+                  <div className='flex items-center gap-2'>
+                    {isBinaryEntry(file) ? <Badge variant='outline'>binary</Badge> : null}
+                    <Badge variant='secondary'>{formatSize(file.size)}</Badge>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1050,29 +1110,6 @@ function StepType({ draft, onChange }: StepProps) {
       </CardContent>
     </Card>
   );
-}
-
-/**
- * Normalize uploaded file paths by stripping a single common leading directory
- * shared by every entry. Browser folder uploads (`webkitRelativePath` or
- * drag-and-drop of a directory) prefix each file with the selected folder's
- * name, which otherwise double-nests the asset under its registry path and
- * causes the manifest entrypoint/files fields to reference paths that don't
- * exist in the committed tree. Flat drops and divergent roots are left
- * untouched.
- */
-function stripCommonRoot(files: FileEntry[]): FileEntry[] {
-  if (files.length === 0) return files;
-  const heads = files.map((f) => {
-    const i = f.path.indexOf('/');
-    return i === -1 ? null : f.path.slice(0, i);
-  });
-  const root = heads[0];
-  if (root === null || heads.some((h) => h !== root)) return files;
-  const prefix = `${root}/`;
-  return files
-    .map((f) => ({ ...f, path: f.path.slice(prefix.length) }))
-    .filter((f) => f.path.length > 0);
 }
 
 function VersionConflictPanel({
@@ -1162,8 +1199,7 @@ async function walkFsEntry(entry: FileSystemEntry): Promise<FileEntry[]> {
     const fileEntry = entry as FileSystemFileEntry;
     const file = await new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
     const relPath = entry.fullPath.replace(/^\//, '') || file.name;
-    const content = await file.text();
-    return [{ content, path: relPath, size: file.size }];
+    return [await fileToFileEntry(file, relPath)];
   }
   const dirEntry = entry as FileSystemDirectoryEntry;
   const reader = dirEntry.createReader();

@@ -352,6 +352,35 @@ describe('publishContribution', () => {
     expect(paths).toContain('assets/skills/my-skill/1.0.0/manifest.json');
   });
 
+  it('uploads base64 entries verbatim and utf8 entries re-encoded', async () => {
+    const queues = happyPathQueues();
+    const blobSpy = vi.fn((args: unknown) => {
+      const { content } = args as { content: string };
+      return { data: { sha: `blob-${content.slice(0, 6)}` } };
+    });
+    // manifest.json + SKILL.md + assets/logo.png = 3 blobs.
+    queues.createBlob = [blobSpy as Handler, blobSpy as Handler, blobSpy as Handler];
+    const { octokit } = makeFakeOctokit(queues);
+
+    const pngBase64 = 'iVBORw0KGgo='; // arbitrary base64 payload
+
+    await publishContribution({
+      files: [
+        { content: '# Skill body', encoding: 'utf8', path: 'SKILL.md' },
+        { content: pngBase64, encoding: 'base64', path: 'assets/logo.png' },
+      ],
+      manifest: baseManifest(),
+      octokit,
+      readme: '',
+      retry: fastRetry,
+    });
+
+    const contents = blobSpy.mock.calls.map((call) => (call[0] as { content: string }).content);
+    // Binary entry is passed through unchanged; text entry is base64-encoded.
+    expect(contents).toContain(pngBase64);
+    expect(contents).not.toContain('# Skill body');
+  });
+
   it('preserves divergent top-level directories without stripping', async () => {
     const queues = happyPathQueues();
     const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));

@@ -1,14 +1,18 @@
 /* eslint-disable perfectionist/sort-modules */
 import type { Octokit } from '@octokit/rest';
 
+import type { FileEncoding } from './file-entry';
 import type { Manifest } from './schemas/manifest';
 
 import { callWithRetry, type RetryOptions } from './fetch-retry';
+import { basename, stripCommonRoot } from './file-entry';
 import { mapOctokitError, PublishBranchCollisionError, PublishError } from './publish-errors';
 import { DEFAULT_OWNER, DEFAULT_REPO } from './registry-client';
 
 export interface PublishFileEntry {
   content: string;
+  /** `base64` content is uploaded verbatim; absent/`utf8` is encoded on upload. */
+  encoding?: FileEncoding;
   path: string;
 }
 
@@ -96,7 +100,7 @@ export async function publishContribution(options: PublishContributionOptions): 
         const response = await callWithRetry(
           () =>
             octokit.rest.git.createBlob({
-              content: toBase64(file.content),
+              content: file.encoding === 'base64' ? file.content : toBase64(file.content),
               encoding: 'base64',
               owner: DEFAULT_OWNER,
               repo: DEFAULT_REPO,
@@ -381,32 +385,6 @@ async function ensureBranchAvailable(params: {
 
 function wrapError(error: unknown): PublishError {
   return mapOctokitError(error);
-}
-
-function basename(path: string): string {
-  const i = path.lastIndexOf('/');
-  return i === -1 ? path : path.slice(i + 1);
-}
-
-/**
- * Normalize uploaded file paths by stripping a single common leading directory
- * shared by every file. Browser folder uploads (via `webkitRelativePath` or
- * drag-and-drop of a directory) prefix each entry with the selected folder's
- * name, which would otherwise double-nest the asset under its registry path.
- * Flat drops and divergent roots are left untouched.
- */
-function stripCommonRoot(files: PublishFileEntry[]): PublishFileEntry[] {
-  if (files.length === 0) return files;
-  const heads = files.map((f) => {
-    const i = f.path.indexOf('/');
-    return i === -1 ? null : f.path.slice(0, i);
-  });
-  const root = heads[0];
-  if (root === null || heads.some((h) => h !== root)) return files;
-  const prefix = `${root}/`;
-  return files
-    .map((f) => ({ ...f, path: f.path.slice(prefix.length) }))
-    .filter((f) => f.path.length > 0);
 }
 
 function toBase64(content: string): string {
