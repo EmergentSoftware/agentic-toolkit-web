@@ -104,18 +104,6 @@ export async function isSkillArchive(file: File): Promise<boolean> {
   return ZIP_MAGIC.every((byte, i) => head[i] === byte);
 }
 
-function formatMb(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function normalizeEntrypointCase(path: string): string {
-  const base = basename(path);
-  if (base !== 'SKILL.md' && base.toLowerCase() === 'skill.md') {
-    return `${path.slice(0, path.length - base.length)}SKILL.md`;
-  }
-  return path;
-}
-
 /**
  * Normalize a zip entry path and reject anything that escapes the archive root.
  * Returns the cleaned, forward-slashed path, or `null` for absolute paths,
@@ -131,4 +119,16 @@ export function sanitizeEntryPath(raw: string): null | string {
   if (segments.some((segment) => segment === '..')) return null;
   const cleaned = segments.join('/');
   return cleaned === '' ? null : cleaned;
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function normalizeEntrypointCase(path: string): string {
+  const base = basename(path);
+  if (base !== 'SKILL.md' && base.toLowerCase() === 'skill.md') {
+    return `${path.slice(0, path.length - base.length)}SKILL.md`;
+  }
+  return path;
 }
