@@ -120,9 +120,14 @@ export async function downloadBundle(
   options: DownloadBundleOptions,
 ): Promise<{ blob: Blob; filename: string }> {
   const bundle = await fetchBundleManifestForDownload(name, options);
+  const format = options.format ?? 'zip';
 
   const zip = new JSZip();
-  zip.file('bundle.json', `${JSON.stringify(bundle, null, 2)}\n`);
+  // The `.skill` variant drops ATK's own bundle metadata so the archive contains
+  // only drop-in assets.
+  if (format !== 'skill') {
+    zip.file('bundle.json', `${JSON.stringify(bundle, null, 2)}\n`);
+  }
 
   for (const member of bundle.assets) {
     const version = resolveMemberVersion(member, options);
@@ -132,12 +137,27 @@ export async function downloadBundle(
       );
     }
     const memberRef: AssetRef = { name: member.name, org: member.org, type: member.type, version };
+
+    // In `.skill` format, skill members become their own nested `.skill` archive
+    // so each one drops cleanly into a skills directory.
+    if (format === 'skill' && member.type === 'skill') {
+      const { blob } = await downloadAsset(memberRef, {
+        ...options,
+        format: 'skill',
+        triggerDownload: () => {},
+      });
+      zip.file(`${member.name}.skill`, blob);
+      continue;
+    }
+
     const visited = new Map<string, FetchedAssetBundle>();
     const rootBundle = await fetchAssetBundle(memberRef, options, visited);
 
     const memberFolder = zip.folder(member.name);
     if (!memberFolder) throw new Error(`Failed to create zip folder for ${member.name}`);
-    addBundleToZip(memberFolder, rootBundle);
+    // Strip the member's own metadata in `.skill` format; dependency folders keep
+    // their manifests (matching downloadAsset's `.skill` behavior).
+    addBundleToZip(memberFolder, rootBundle, format === 'skill' ? SKILL_EXCLUDED_FILES : undefined);
 
     for (const [key, dep] of visited) {
       if (key === refKey(memberRef)) continue;

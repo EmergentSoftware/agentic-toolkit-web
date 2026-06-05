@@ -510,6 +510,80 @@ describe('downloadBundle', () => {
     expect(trigger).toHaveBeenCalledWith(result.blob, 'feature-workflow-1.0.0.zip');
   });
 
+  it('format: skill nests skill members as .skill files, strips non-skill metadata, and drops bundle.json', async () => {
+    const bundle: Bundle = {
+      assets: [
+        { name: 'code-reviewer', type: 'skill', version: '2.0.0' },
+        { name: 'validate', type: 'agent', version: '1.1.0' },
+      ],
+      author: 'EmergentSoftware',
+      description: 'review workflow',
+      name: 'review-workflow',
+      version: '1.0.0',
+    };
+
+    const skillManifest: Manifest = {
+      author: 'EmergentSoftware',
+      description: 'reviewer',
+      entrypoint: 'SKILL.md',
+      files: ['SKILL.md'],
+      name: 'code-reviewer',
+      type: 'skill',
+      version: '2.0.0',
+    };
+    const agentManifest: Manifest = {
+      author: 'EmergentSoftware',
+      description: 'validate',
+      entrypoint: 'AGENT.md',
+      files: ['AGENT.md'],
+      name: 'validate',
+      type: 'agent',
+      version: '1.1.0',
+    };
+
+    const assetFetch = setupFetchForAssets([
+      { files: { 'README.md': 'skill readme', 'SKILL.md': 'skill body' }, manifest: skillManifest },
+      { files: { 'AGENT.md': 'agent body', 'README.md': 'agent readme' }, manifest: agentManifest },
+    ]);
+    const bundleUrl = buildBundleUrl('review-workflow', '1.0.0');
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
+      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await downloadBundle('review-workflow', {
+      format: 'skill',
+      retry: fastRetry,
+      triggerDownload: vi.fn(),
+      version: '1.0.0',
+    });
+
+    // Outer archive keeps the .zip extension even for the .skill variant.
+    expect(result.filename).toBe('review-workflow-1.0.0.zip');
+
+    const outer = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    const outerKeys = Object.keys(outer.files).filter((k) => !outer.files[k].dir);
+
+    // bundle.json is dropped.
+    expect(outerKeys).not.toContain('bundle.json');
+
+    // The skill member is a nested .skill file…
+    expect(outerKeys).toContain('code-reviewer.skill');
+    const nestedBytes = await outer.file('code-reviewer.skill')!.async('uint8array');
+    const nested = await JSZip.loadAsync(nestedBytes);
+    const nestedKeys = Object.keys(nested.files).filter((k) => !nested.files[k].dir);
+    // …and is itself a metadata-stripped skill archive.
+    expect(nestedKeys).toContain('code-reviewer/SKILL.md');
+    expect(nestedKeys).not.toContain('code-reviewer/manifest.json');
+    expect(nestedKeys).not.toContain('code-reviewer/README.md');
+
+    // The non-skill member stays a folder but with its metadata stripped.
+    expect(outerKeys).toContain('validate/AGENT.md');
+    expect(outerKeys).not.toContain('validate/manifest.json');
+    expect(outerKeys).not.toContain('validate/README.md');
+  });
+
   it('falls back to resolveVersion when a member omits its version', async () => {
     const bundle: Bundle = {
       assets: [{ name: 'clarification-agent', type: 'agent' }],

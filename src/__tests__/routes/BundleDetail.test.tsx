@@ -1,7 +1,7 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -128,6 +128,23 @@ describe('BundleDetailRoute', () => {
 
     const setup = screen.getByTestId('bundle-detail-setup');
     expect(within(setup).getByRole('heading', { level: 2, name: 'Setup' })).toBeInTheDocument();
+  });
+
+  it('downloads the bundle in the chosen format from the header menu', () => {
+    const download = vi.fn().mockResolvedValue(undefined);
+    useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+
+    renderAt('/bundles/feature-workflow');
+
+    fireEvent.click(screen.getByTestId('bundle-detail-download'));
+    fireEvent.click(screen.getByTestId('bundle-detail-download-skill'));
+
+    expect(download).toHaveBeenCalledWith(
+      'feature-workflow',
+      expect.objectContaining({ format: 'skill', resolveVersion: expect.any(Function), version: '1.0.0' }),
+    );
   });
 
   it('shows a not-found state with a back link when the manifest is missing', () => {

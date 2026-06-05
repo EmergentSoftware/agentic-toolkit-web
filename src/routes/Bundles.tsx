@@ -13,8 +13,10 @@ import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import type { DownloadFormat } from '@/lib/download-service';
 import type { RegistryAsset, RegistryBundle } from '@/lib/schemas/registry';
 
+import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
 import { useFullWidthLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
@@ -62,7 +64,7 @@ const DEFAULT_COLUMN_VISIBILITY: VisibilityState = { author: false, tags: false 
 interface BundlesCardListProps {
   isDownloading: (name: string) => boolean;
   onCardClick: (row: BundleRow) => void;
-  onDownload: (row: BundleRow) => void;
+  onDownload: (row: BundleRow, format: DownloadFormat) => void;
   rows: BundleRow[];
 }
 
@@ -225,13 +227,19 @@ export function BundlesRoute() {
         cell: ({ row }) => {
           const loading = isDownloading(row.original.name);
           return (
-            <DownloadBundleButton
+            <DownloadMenu
+              enableSkillFormat
               isLoading={loading}
               name={row.original.name}
-              onClick={(event) => {
-                event.stopPropagation();
-                void download(row.original.name, { resolveVersion, version: row.original.version });
-              }}
+              onDownload={(format) =>
+                void download(row.original.name, {
+                  format,
+                  resolveVersion,
+                  version: row.original.version,
+                })
+              }
+              stopPropagation
+              testId={`bundles-download-${row.original.name}`}
             />
           );
         },
@@ -399,7 +407,9 @@ export function BundlesRoute() {
           <BundlesCardList
             isDownloading={isDownloading}
             onCardClick={navigateToBundle}
-            onDownload={(row) => void download(row.name, { resolveVersion, version: row.version })}
+            onDownload={(row, format) =>
+              void download(row.name, { format, resolveVersion, version: row.version })
+            }
             rows={rows}
           />
         </>
@@ -464,13 +474,13 @@ function BundlesCardList({ isDownloading, onCardClick, onDownload, rows }: Bundl
                   ))}
                 </div>
               ) : null}
-              <DownloadBundleButton
+              <DownloadMenu
+                enableSkillFormat
                 isLoading={isDownloading(row.name)}
                 name={row.name}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDownload(row);
-                }}
+                onDownload={(format) => onDownload(row, format)}
+                stopPropagation
+                testId={`bundles-download-${row.name}`}
               />
             </CardContent>
           </Card>
@@ -588,36 +598,6 @@ function ColumnsPopover({
         </Popover.Positioner>
       </Popover.Portal>
     </Popover.Root>
-  );
-}
-
-function DownloadBundleButton({
-  isLoading,
-  name,
-  onClick,
-}: {
-  isLoading: boolean;
-  name: string;
-  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) {
-  return (
-    <Button
-      aria-busy={isLoading || undefined}
-      aria-label={`Download ${name}`}
-      data-testid={`bundles-download-${name}`}
-      disabled={isLoading}
-      onClick={onClick}
-      size='sm'
-      variant='outline'
-    >
-      {isLoading ? (
-        <span
-          aria-hidden='true'
-          className='mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent'
-        />
-      ) : null}
-      {isLoading ? 'Downloading…' : 'Download'}
-    </Button>
   );
 }
 

@@ -182,17 +182,33 @@ describe('BundlesRoute', () => {
     expect(screen.getByTestId('bundle-detail-route')).toBeInTheDocument();
   });
 
-  it('invokes the download hook (with resolveVersion) when the row action is activated', () => {
+  it('invokes the download hook (with resolveVersion and format) when a row download option is chosen', () => {
     const download = vi.fn().mockResolvedValue(undefined);
     useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
     mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
     renderBundles();
 
     fireEvent.click(screen.getAllByTestId('bundles-download-feature-workflow')[0]!);
+    fireEvent.click(screen.getAllByTestId('bundles-download-feature-workflow-zip')[0]!);
 
     expect(download).toHaveBeenCalledWith(
       'feature-workflow',
-      expect.objectContaining({ resolveVersion: expect.any(Function) }),
+      expect.objectContaining({ format: 'zip', resolveVersion: expect.any(Function) }),
+    );
+  });
+
+  it('downloads a bundle in .skill format when the skill option is chosen', () => {
+    const download = vi.fn().mockResolvedValue(undefined);
+    useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBundles();
+
+    fireEvent.click(screen.getAllByTestId('bundles-download-feature-workflow')[0]!);
+    fireEvent.click(screen.getAllByTestId('bundles-download-feature-workflow-skill')[0]!);
+
+    expect(download).toHaveBeenCalledWith(
+      'feature-workflow',
+      expect.objectContaining({ format: 'skill', resolveVersion: expect.any(Function) }),
     );
   });
 

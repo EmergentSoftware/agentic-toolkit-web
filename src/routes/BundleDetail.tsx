@@ -5,6 +5,7 @@ import type { Bundle, Manifest } from '@/lib/schemas';
 import type { BundleAssetRef } from '@/lib/schemas/bundle';
 import type { CreateBundleSeed } from '@/routes/CreateBundle';
 
+import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
 import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
@@ -151,10 +152,14 @@ export function BundleDetailRoute() {
             >
               Edit / New version
             </Button>
-            <DownloadButton
+            <DownloadMenu
+              enableSkillFormat
               isLoading={isDownloading(manifest.name)}
               name={manifest.name}
-              onClick={() => void download(manifest.name, { resolveVersion, version: manifest.version })}
+              onDownload={(format) =>
+                void download(manifest.name, { format, resolveVersion, version: manifest.version })
+              }
+              testId='bundle-detail-download'
             />
           </div>
         }
@@ -331,33 +336,6 @@ function collectMemberRefs(
     refs.push({ name: member.name, org: member.org, type: member.type, version });
   }
   return refs;
-}
-
-function DownloadButton({
-  isLoading,
-  name,
-  onClick,
-}: {
-  isLoading: boolean;
-  name: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      aria-busy={isLoading || undefined}
-      aria-label={`Download ${name}`}
-      data-testid='bundle-detail-download'
-      disabled={isLoading}
-      onClick={onClick}
-      size='sm'
-      variant='outline'
-    >
-      {isLoading ? (
-        <span aria-hidden='true' className='mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent' />
-      ) : null}
-      {isLoading ? 'Downloading…' : 'Download'}
-    </Button>
-  );
 }
 
 function memberKey(member: BundleAssetRef): string {
