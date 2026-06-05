@@ -3,6 +3,7 @@ import type { Octokit } from '@octokit/rest';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { Bundle } from '@/lib/schemas/bundle';
 import type { Manifest } from '@/lib/schemas/manifest';
 
 import {
@@ -11,7 +12,7 @@ import {
   PublishPermissionError,
   PublishRateLimitError,
 } from '@/lib/publish-errors';
-import { DRY_RUN_PR_URL_MARKER, publishContribution } from '@/lib/publish-service';
+import { DRY_RUN_PR_URL_MARKER, publishBundle, publishContribution } from '@/lib/publish-service';
 
 const fastRetry = { baseDelayMs: 1, jitter: false, maxDelayMs: 5, maxRetries: 0 } as const;
 
@@ -402,5 +403,103 @@ describe('publishContribution', () => {
     const paths = treeArgs.tree.map((entry) => entry.path);
     expect(paths).toContain('assets/skills/my-skill/1.0.0/a/x.md');
     expect(paths).toContain('assets/skills/my-skill/1.0.0/b/y.md');
+  });
+});
+
+function baseBundle(): Bundle {
+  return {
+    assets: [
+      { name: 'distill-feature', type: 'skill' },
+      { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
+    ],
+    author: 'octo-login',
+    description: 'A structured feature workflow',
+    name: 'feature-workflow',
+    tags: ['workflow'],
+    version: '1.0.0',
+  };
+}
+
+describe('publishBundle', () => {
+  it('walks the full happy path and writes bundle.json under the versioned path', async () => {
+    const queues = happyPathQueues();
+    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
+    queues.createTree = [treeSpy as Handler];
+    // bundle.json + README.md = 2 blobs
+    queues.createBlob = [() => ({ data: { sha: 'blob-1' } }), () => ({ data: { sha: 'blob-2' } })];
+    const { octokit, spies } = makeFakeOctokit(queues);
+
+    const result = await publishBundle({
+      bundle: baseBundle(),
+      octokit,
+      readme: '# Feature workflow',
+      retry: fastRetry,
+    });
+
+    expect(result.dryRun).toBe(false);
+    expect(result.branchName).toBe('bundle/feature-workflow/1.0.0');
+    expect(spies.createBlob).toHaveBeenCalledTimes(2);
+
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
+    const paths = treeArgs.tree.map((entry) => entry.path);
+    expect(paths).toContain('bundles/feature-workflow/1.0.0/bundle.json');
+    expect(paths).toContain('bundles/feature-workflow/1.0.0/README.md');
+
+    expect(spies.pullsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        head: 'bundle/feature-workflow/1.0.0',
+        title: 'feat(registry): add bundle feature-workflow@1.0.0',
+      }),
+    );
+  });
+
+  it('omits README.md when the readme is blank (bundle.json only)', async () => {
+    const queues = happyPathQueues();
+    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
+    queues.createTree = [treeSpy as Handler];
+    queues.createBlob = [() => ({ data: { sha: 'blob-1' } })];
+    const { octokit, spies } = makeFakeOctokit(queues);
+
+    await publishBundle({ bundle: baseBundle(), octokit, readme: '', retry: fastRetry });
+
+    expect(spies.createBlob).toHaveBeenCalledTimes(1);
+    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
+    const paths = treeArgs.tree.map((entry) => entry.path);
+    expect(paths).toEqual(['bundles/feature-workflow/1.0.0/bundle.json']);
+  });
+
+  it('throws PublishBranchCollisionError when the bundle branch already exists', async () => {
+    const queues: OctokitQueues = {
+      ...happyPathQueues(),
+      getRef: [
+        () => ({ data: { object: { sha: 'base-sha' } } }),
+        () => ({ data: { object: { sha: 'existing' } } }),
+      ],
+    };
+    const { octokit } = makeFakeOctokit(queues);
+
+    await expect(
+      publishBundle({ bundle: baseBundle(), octokit, readme: '', retry: fastRetry }),
+    ).rejects.toBeInstanceOf(PublishBranchCollisionError);
+  });
+
+  it('dry-run mode skips pulls.create and returns the synthesized marker URL', async () => {
+    const queues = happyPathQueues();
+    queues.createBlob = [() => ({ data: { sha: 'blob-1' } })];
+    queues.pullsCreate = [];
+    const { octokit, spies } = makeFakeOctokit(queues);
+
+    const result = await publishBundle({
+      bundle: baseBundle(),
+      dryRun: true,
+      octokit,
+      readme: '',
+      retry: fastRetry,
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.prUrl).toBe(DRY_RUN_PR_URL_MARKER);
+    expect(spies.pullsCreate).not.toHaveBeenCalled();
+    expect(spies.createRef).toHaveBeenCalledTimes(1);
   });
 });

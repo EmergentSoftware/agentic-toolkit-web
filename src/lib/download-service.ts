@@ -11,6 +11,13 @@ const DEFAULT_OWNER = 'EmergentSoftware';
 const DEFAULT_REPO = 'agentic-toolkit-registry';
 const GITHUB_API = 'https://api.github.com';
 
+/**
+ * Files stripped from the top-level asset folder when downloading in `.skill`
+ * format. A `.skill` archive is the same zip minus ATK's own metadata so it
+ * drops cleanly into a Claude Code skills directory.
+ */
+const SKILL_EXCLUDED_FILES = new Set(['manifest.json', 'README.md']);
+
 export interface AssetRef {
   name: string;
   org?: string;
@@ -19,6 +26,8 @@ export interface AssetRef {
 }
 
 export interface DownloadAssetOptions {
+  /** Archive variant; defaults to `zip`. */
+  format?: DownloadFormat;
   owner?: string;
   ref?: string;
   repo?: string;
@@ -36,7 +45,18 @@ export interface DownloadBundleOptions extends DownloadAssetOptions {
    * exactly as it appears in `bundle.json`.
    */
   resolveVersion?: (member: BundleAssetRef) => string | undefined;
+  /**
+   * The bundle's own version, used to locate `bundles/{name}/{version}/bundle.json`.
+   * Take it from the registry index entry's `version`.
+   */
+  version: string;
 }
+
+/**
+ * Download archive variant. `zip` is the full archive; `skill` omits the
+ * top-level asset's `manifest.json`/`README.md` and uses a `.skill` extension.
+ */
+export type DownloadFormat = 'skill' | 'zip';
 
 interface FetchedAssetBundle {
   files: Map<string, Uint8Array>;
@@ -60,11 +80,12 @@ export async function downloadAsset(
 ): Promise<{ blob: Blob; filename: string }> {
   const visited = new Map<string, FetchedAssetBundle>();
   const rootBundle = await fetchAssetBundle(ref, options, visited);
+  const format = options.format ?? 'zip';
 
   const zip = new JSZip();
   const rootFolder = zip.folder(ref.name);
   if (!rootFolder) throw new Error(`Failed to create zip folder for ${ref.name}`);
-  addBundleToZip(rootFolder, rootBundle);
+  addBundleToZip(rootFolder, rootBundle, format === 'skill' ? SKILL_EXCLUDED_FILES : undefined);
 
   for (const [key, bundle] of visited) {
     if (key === refKey(ref)) continue;
@@ -74,7 +95,8 @@ export async function downloadAsset(
   }
 
   const blob = await zip.generateAsync({ type: 'blob' });
-  const filename = `${ref.name}-${ref.version}.zip`;
+  const ext = format === 'skill' ? 'skill' : 'zip';
+  const filename = `${ref.name}-${ref.version}.${ext}`;
 
   const trigger = options.triggerDownload ?? defaultTriggerDownload;
   trigger(blob, filename);
@@ -95,7 +117,7 @@ export async function downloadAsset(
  */
 export async function downloadBundle(
   name: string,
-  options: DownloadBundleOptions = {},
+  options: DownloadBundleOptions,
 ): Promise<{ blob: Blob; filename: string }> {
   const bundle = await fetchBundleManifestForDownload(name, options);
 
@@ -134,8 +156,9 @@ export async function downloadBundle(
   return { blob, filename };
 }
 
-function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle): void {
+function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle, exclude?: Set<string>): void {
   for (const [path, bytes] of bundle.files) {
+    if (exclude?.has(path)) continue;
     zip.file(path, bytes);
   }
 }
@@ -143,7 +166,7 @@ function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle): void {
 function buildBundleManifestUrl(name: string, options: DownloadBundleOptions): string {
   const owner = options.owner ?? DEFAULT_OWNER;
   const repo = options.repo ?? DEFAULT_REPO;
-  const path = `bundles/${encodePathSegment(name)}/bundle.json`;
+  const path = `bundles/${encodePathSegment(name)}/${encodePathSegment(options.version)}/bundle.json`;
   const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${path}`;
   return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
 }

@@ -6,13 +6,13 @@ import { rcompare as semverRcompare } from 'semver';
 
 import type { AssetType, Manifest, RegistryAsset } from '@/lib/schemas';
 
+import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
 import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAssetManifest } from '@/hooks/useAssetManifest';
 import { useAssetReadme } from '@/hooks/useAssetReadme';
@@ -114,7 +114,8 @@ export function AssetDetailRoute() {
     <div className='flex flex-col gap-6'>
       <PageHeader
         actions={
-          <DownloadButton
+          <DownloadMenu
+            enableSkillFormat={manifest.type === 'skill'}
             isLoading={isDownloading({
               name: manifest.name,
               org: manifest.org,
@@ -122,14 +123,18 @@ export function AssetDetailRoute() {
               version: manifest.version,
             })}
             name={manifest.name}
-            onClick={() =>
-              void download({
-                name: manifest.name,
-                org: manifest.org,
-                type: manifest.type,
-                version: manifest.version,
-              })
+            onDownload={(format) =>
+              void download(
+                {
+                  name: manifest.name,
+                  org: manifest.org,
+                  type: manifest.type,
+                  version: manifest.version,
+                },
+                { format },
+              )
             }
+            testId='asset-detail-download'
           />
         }
         description={
@@ -297,33 +302,6 @@ function collectDirectDepRefs(manifest: Manifest | undefined): AssetManifestRef[
     refs.push({ name: dep.name, type: dep.type, version: dep.version });
   }
   return refs;
-}
-
-function DownloadButton({
-  isLoading,
-  name,
-  onClick,
-}: {
-  isLoading: boolean;
-  name: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      aria-busy={isLoading || undefined}
-      aria-label={`Download ${name}`}
-      data-testid='asset-detail-download'
-      disabled={isLoading}
-      onClick={onClick}
-      size='sm'
-      variant='outline'
-    >
-      {isLoading ? (
-        <span aria-hidden='true' className='mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent' />
-      ) : null}
-      {isLoading ? 'Downloading…' : 'Download'}
-    </Button>
-  );
 }
 
 function findRegistryAsset(

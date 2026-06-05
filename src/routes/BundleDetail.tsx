@@ -1,8 +1,9 @@
 import { useCallback, useMemo } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 
 import type { Bundle, Manifest } from '@/lib/schemas';
 import type { BundleAssetRef } from '@/lib/schemas/bundle';
+import type { CreateBundleSeed } from '@/routes/CreateBundle';
 
 import { EmptyState } from '@/components/EmptyState';
 import { type FileGroup, FilesCard } from '@/components/FilesCard';
@@ -19,12 +20,39 @@ import { useRegistry } from '@/hooks/useRegistry';
 import { listAssetFiles } from '@/lib/file-list';
 import { type AssetManifestRef } from '@/lib/registry-client';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
+import { bumpVersion } from '@/lib/version-utils';
 
 export function BundleDetailRoute() {
   const { bundleId } = useParams<{ bundleId: string }>();
-  const manifestQuery = useBundleManifest({ name: bundleId });
+  const navigate = useNavigate();
   const registryQuery = useRegistry();
+  const bundleVersion = useMemo(
+    () => registryQuery.data?.bundles?.find((bundle) => bundle.name === bundleId)?.version,
+    [registryQuery.data, bundleId],
+  );
+  const manifestQuery = useBundleManifest({ name: bundleId, version: bundleVersion });
   const { download, isDownloading } = useDownloadBundle();
+
+  const editNewVersion = useCallback(
+    (bundle: Bundle) => {
+      const seed: CreateBundleSeed = {
+        assets: bundle.assets.map((member) => ({
+          name: member.name,
+          ...(member.org ? { org: member.org } : {}),
+          type: member.type,
+          ...(member.version ? { version: member.version } : {}),
+        })),
+        author: bundle.author,
+        description: bundle.description,
+        name: bundle.name,
+        setupInstructions: bundle.setupInstructions,
+        tags: bundle.tags,
+        version: safeBumpMinor(bundle.version),
+      };
+      navigate('/bundles/new', { state: seed });
+    },
+    [navigate],
+  );
 
   const resolveVersion = useCallback(
     (member: BundleAssetRef) => {
@@ -71,7 +99,7 @@ export function BundleDetailRoute() {
     );
   }
 
-  if (manifestQuery.isLoading) {
+  if (registryQuery.isLoading || manifestQuery.isLoading) {
     return (
       <>
         <PageHeader title={bundleId} />
@@ -99,6 +127,11 @@ export function BundleDetailRoute() {
     );
   }
 
+  // Registry resolved but this bundle isn't indexed → there's no version to fetch.
+  if (registryQuery.isSuccess && !bundleVersion && !manifestQuery.data) {
+    return <BundleNotFound />;
+  }
+
   const manifest = manifestQuery.data;
   if (!manifest) {
     return <BundleNotFound />;
@@ -108,11 +141,22 @@ export function BundleDetailRoute() {
     <div className='flex flex-col gap-6'>
       <PageHeader
         actions={
-          <DownloadButton
-            isLoading={isDownloading(manifest.name)}
-            name={manifest.name}
-            onClick={() => void download(manifest.name, { resolveVersion })}
-          />
+          <div className='flex items-center gap-2'>
+            <Button
+              data-testid='bundle-detail-new-version'
+              onClick={() => editNewVersion(manifest)}
+              size='sm'
+              type='button'
+              variant='outline'
+            >
+              Edit / New version
+            </Button>
+            <DownloadButton
+              isLoading={isDownloading(manifest.name)}
+              name={manifest.name}
+              onClick={() => void download(manifest.name, { resolveVersion, version: manifest.version })}
+            />
+          </div>
         }
         description={
           <span className='flex flex-wrap items-center gap-2 text-muted-foreground'>
@@ -327,6 +371,15 @@ function MetadataRow({ children, label }: { children: React.ReactNode; label: st
       <div className='text-foreground'>{children}</div>
     </div>
   );
+}
+
+/** Suggest the next bundle version (minor bump), falling back to the current value if unparseable. */
+function safeBumpMinor(version: string): string {
+  try {
+    return bumpVersion(version, 'minor');
+  } catch {
+    return version;
+  }
 }
 
 export default BundleDetailRoute;

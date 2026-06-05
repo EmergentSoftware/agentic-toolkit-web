@@ -349,7 +349,10 @@ describe('AssetDetailRoute', () => {
       expect(screen.getByTestId('asset-detail-version-selector')).toHaveTextContent('v1.0.0');
 
       fireEvent.click(screen.getByRole('button', { name: /download validate/i }));
-      expect(download).toHaveBeenCalledWith(expect.objectContaining({ name: 'validate', version: '1.0.0' }));
+      expect(download).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'validate', version: '1.0.0' }),
+        { format: 'zip' },
+      );
     });
   });
 });

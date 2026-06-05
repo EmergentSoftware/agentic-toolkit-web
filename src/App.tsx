@@ -15,6 +15,8 @@ import { BundleDetailRoute } from '@/routes/BundleDetail';
 import { BundlesRoute } from '@/routes/Bundles';
 import { ContributeRoute } from '@/routes/Contribute';
 import { ContributeSuccessRoute } from '@/routes/ContributeSuccess';
+import { CreateBundleRoute } from '@/routes/CreateBundle';
+import { CreateBundleSuccessRoute } from '@/routes/CreateBundleSuccess';
 import { IndexRoute } from '@/routes/Index';
 import { NotAuthorizedRoute } from '@/routes/NotAuthorized';
 import { NotFoundRoute } from '@/routes/NotFound';
@@ -72,6 +74,26 @@ export function App() {
                     </RouteBoundary>
                   }
                   path='bundles'
+                />
+                <Route
+                  element={
+                    <RouteBoundary scope='Create bundle'>
+                      <RequireAuth>
+                        <CreateBundleRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='bundles/new'
+                />
+                <Route
+                  element={
+                    <RouteBoundary scope='Create bundle success'>
+                      <RequireAuth>
+                        <CreateBundleSuccessRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='bundles/new/success'
                 />
                 <Route
                   element={

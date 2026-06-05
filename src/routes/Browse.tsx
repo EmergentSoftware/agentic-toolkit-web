@@ -13,9 +13,11 @@ import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import type { DownloadFormat } from '@/lib/download-service';
 import type { AssetType } from '@/lib/schemas/manifest';
 import type { RegistryAsset } from '@/lib/schemas/registry';
 
+import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
 import { useFullWidthLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
@@ -54,7 +56,7 @@ const SHOW_ORG_SCOPED_STORAGE_KEY = 'atk.browse.showOrgScoped';
 interface BrowseCardListProps {
   isDownloading: (ref: { name: string; org?: string; type: AssetType; version: string }) => boolean;
   onCardClick: (row: BrowseRow) => void;
-  onDownload: (row: BrowseRow) => void;
+  onDownload: (row: BrowseRow, format: DownloadFormat) => void;
   rows: BrowseRow[];
 }
 
@@ -227,13 +229,13 @@ export function BrowseRoute() {
           const assetRef = rowToAssetRef(row.original);
           const loading = isDownloading(assetRef);
           return (
-            <DownloadRowButton
+            <DownloadMenu
+              enableSkillFormat={row.original.type === 'skill'}
               isLoading={loading}
               name={row.original.name}
-              onClick={(event) => {
-                event.stopPropagation();
-                void download(assetRef);
-              }}
+              onDownload={(format) => void download(assetRef, { format })}
+              stopPropagation
+              testId={`browse-download-${row.original.name}`}
             />
           );
         },
@@ -413,7 +415,7 @@ export function BrowseRoute() {
           <BrowseCardList
             isDownloading={isDownloading}
             onCardClick={navigateToAsset}
-            onDownload={(row) => void download(rowToAssetRef(row))}
+            onDownload={(row, format) => void download(rowToAssetRef(row), { format })}
             rows={rows}
           />
         </>
@@ -486,13 +488,13 @@ function BrowseCardList({ isDownloading, onCardClick, onDownload, rows }: Browse
                   ))}
                 </div>
               ) : null}
-              <DownloadRowButton
+              <DownloadMenu
+                enableSkillFormat={row.type === 'skill'}
                 isLoading={isDownloading(rowToAssetRef(row))}
                 name={row.name}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDownload(row);
-                }}
+                onDownload={(format) => onDownload(row, format)}
+                stopPropagation
+                testId={`browse-download-${row.name}`}
               />
             </CardContent>
           </Card>
@@ -610,36 +612,6 @@ function ColumnsPopover({
         </Popover.Positioner>
       </Popover.Portal>
     </Popover.Root>
-  );
-}
-
-function DownloadRowButton({
-  isLoading,
-  name,
-  onClick,
-}: {
-  isLoading: boolean;
-  name: string;
-  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) {
-  return (
-    <Button
-      aria-busy={isLoading || undefined}
-      aria-label={`Download ${name}`}
-      data-testid={`browse-download-${name}`}
-      disabled={isLoading}
-      onClick={onClick}
-      size='sm'
-      variant='outline'
-    >
-      {isLoading ? (
-        <span
-          aria-hidden='true'
-          className='mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent'
-        />
-      ) : null}
-      {isLoading ? 'Downloading…' : 'Download'}
-    </Button>
   );
 }
 

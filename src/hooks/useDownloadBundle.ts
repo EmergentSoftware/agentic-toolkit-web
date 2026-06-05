@@ -6,7 +6,7 @@ import { useSession } from './useSession';
 import { useToast } from './useToast';
 
 export interface UseDownloadBundleResult {
-  download: (name: string, options?: DownloadBundleOptions) => Promise<void>;
+  download: (name: string, options: DownloadBundleOptions) => Promise<void>;
   isDownloading: (name: string) => boolean;
 }
 
@@ -40,7 +40,7 @@ export function useDownloadBundle(): UseDownloadBundleResult {
   }, []);
 
   const download = useCallback(
-    async (name: string, options?: DownloadBundleOptions) => {
+    async (name: string, options: DownloadBundleOptions) => {
       if (inFlightRef.current.has(name)) return;
       markStart(name);
       try {

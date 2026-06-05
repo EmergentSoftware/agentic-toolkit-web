@@ -17,11 +17,11 @@ export interface AssetManifestRef {
   version: string;
 }
 
-/** A pointer to a specific bundle in the registry. */
+/** A pointer to a specific bundle version in the registry. */
 export interface BundleManifestRef {
   name: string;
-  /** Currently unused in the registry path (`bundles/{name}/bundle.json`), but reserved for future versioned bundles. */
-  version?: string;
+  /** Bundle version — resolves to `bundles/{name}/{version}/bundle.json`. Take it from the registry index entry's `version`. */
+  version: string;
 }
 
 /**
@@ -65,12 +65,12 @@ export async function fetchAssetReadme(
   }
 }
 
-/** Fetch and validate a bundle's `bundle.json`. */
+/** Fetch and validate a bundle's `bundle.json` from its versioned registry path. */
 export async function fetchBundleManifest(
   ref: BundleManifestRef,
   options: RegistryClientOptions,
 ): Promise<Bundle> {
-  const path = `bundles/${ref.name}/bundle.json`;
+  const path = `bundles/${ref.name}/${ref.version}/bundle.json`;
   return await fetchAndParse<Bundle>(path, BundleSchema, options);
 }
 
@@ -95,6 +95,20 @@ export function findExistingAsset(
   );
   if (!match) return undefined;
   return { latest: match.latest, org: match.org };
+}
+
+/**
+ * Look up a bundle in the registry index by name. Bundles are always global, so
+ * the match is by name alone. Returns the latest published version, or undefined
+ * when the bundle does not exist yet.
+ */
+export function findExistingBundle(
+  registry: Registry,
+  query: { name: string },
+): undefined | { latest: string } {
+  const match = registry.bundles?.find((b) => b.name === query.name);
+  if (!match) return undefined;
+  return { latest: match.version };
 }
 
 function buildAssetManifestPath(ref: AssetManifestRef): string {

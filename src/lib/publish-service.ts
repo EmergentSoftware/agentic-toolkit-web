@@ -2,6 +2,7 @@
 import type { Octokit } from '@octokit/rest';
 
 import type { FileEncoding } from './file-entry';
+import type { Bundle } from './schemas/bundle';
 import type { Manifest } from './schemas/manifest';
 
 import { callWithRetry, type RetryOptions } from './fetch-retry';
@@ -65,6 +66,56 @@ export const DRY_RUN_PR_URL_MARKER = 'https://dry-run.local/atk/contribute/previ
  */
 export async function publishContribution(options: PublishContributionOptions): Promise<PublishResult> {
   const { dryRun = false, files, manifest, octokit, onProgress, readme, retry, signal } = options;
+  const plan = buildPublishPlan({ files, manifest, readme });
+  return await executePublishPlan(plan, { dryRun, octokit, onProgress, retry, signal });
+}
+
+export interface PublishBundleOptions {
+  bundle: Bundle;
+  dryRun?: boolean;
+  octokit: Octokit;
+  onProgress?: (event: PublishProgressEvent) => void;
+  readme: string;
+  retry?: RetryOptions;
+  signal?: AbortSignal;
+}
+
+/**
+ * Publish a bundle by pushing `bundles/{name}/{version}/bundle.json` (plus an
+ * optional README) to the registry and opening a pull request. A bundle is
+ * metadata-only — it references already-published assets — so this is a thin
+ * sibling of {@link publishContribution} that shares the same Git Data API
+ * plumbing via {@link executePublishPlan}. Branch and PR naming match the CLI's
+ * `atk publish` conventions (`bundle/{name}/{version}`).
+ */
+export async function publishBundle(options: PublishBundleOptions): Promise<PublishResult> {
+  const { bundle, dryRun = false, octokit, onProgress, readme, retry, signal } = options;
+  const plan = buildBundlePublishPlan({ bundle, readme });
+  return await executePublishPlan(plan, { dryRun, octokit, onProgress, retry, signal });
+}
+
+interface ExecutePublishContext {
+  dryRun: boolean;
+  octokit: Octokit;
+  onProgress?: (event: PublishProgressEvent) => void;
+  retry?: RetryOptions;
+  signal?: AbortSignal;
+}
+
+/**
+ * Push a prepared {@link PublishPlan} as a branch via the Git Data API
+ * (blobs → tree → commit → ref) and open a pull request against the registry's
+ * default branch. Shared by asset and bundle publishing.
+ *
+ * When `dryRun` is true every step runs up to — but skipping — the final PR
+ * creation, and the result contains the synthesized DRY_RUN_PR_URL_MARKER so
+ * QA can exercise the full flow without creating a real PR.
+ */
+async function executePublishPlan(
+  plan: PublishPlan,
+  context: ExecutePublishContext,
+): Promise<PublishResult> {
+  const { dryRun, octokit, onProgress, retry, signal } = context;
 
   const emit = (step: PublishProgressStep) => {
     onProgress?.({ message: PROGRESS_COPY[step], step });
@@ -83,8 +134,6 @@ export async function publishContribution(options: PublishContributionOptions): 
       signal,
     });
     const baseSha = upstreamRef.object.sha;
-
-    const plan = buildPublishPlan({ files, manifest, readme });
 
     await ensureBranchAvailable({
       branchName: plan.branchName,
@@ -256,6 +305,66 @@ function buildPublishPlan(params: {
   const prBody = generatePrBody({ listedFiles, manifest });
 
   return { branchName, files: payloadFiles, prBody, prTitle, registryPath };
+}
+
+function buildBundlePublishPlan(params: { bundle: Bundle; readme: string }): PublishPlan {
+  const { bundle, readme } = params;
+  const { name, version } = bundle;
+
+  // Bundles are always global (BundleSchema has no org) and versioned, matching
+  // the CLI publisher's `bundle/{name}/{version}` branch + path conventions.
+  const branchName = `bundle/${name}/${version}`;
+  const registryPath = `bundles/${name}/${version}/`;
+
+  const payloadFiles: PublishFileEntry[] = [
+    { content: `${JSON.stringify(bundle, null, 2)}\n`, path: 'bundle.json' },
+  ];
+  if (readme.trim().length > 0) {
+    payloadFiles.push({ content: readme.endsWith('\n') ? readme : `${readme}\n`, path: 'README.md' });
+  }
+
+  const listedFiles = payloadFiles.map((file) => file.path);
+  const prTitle = `feat(registry): add bundle ${name}@${version}`;
+  const prBody = generateBundlePrBody({ bundle, listedFiles });
+
+  return { branchName, files: payloadFiles, prBody, prTitle, registryPath };
+}
+
+function generateBundlePrBody(params: { bundle: Bundle; listedFiles: string[] }): string {
+  const { bundle, listedFiles } = params;
+  const lines: string[] = [`## New Bundle: ${bundle.name}`, ''];
+  lines.push(`**Version:** ${bundle.version}`);
+  lines.push(`**Author:** ${bundle.author}`);
+  lines.push('');
+  lines.push('### Description');
+  lines.push('');
+  lines.push(bundle.description);
+  lines.push('');
+  lines.push('### Assets');
+  lines.push('');
+  for (const asset of bundle.assets) {
+    const scope = asset.org ? `@${asset.org}/` : '';
+    const pin = asset.version ? `@${asset.version}` : ' (latest)';
+    lines.push(`- ${asset.type}:${scope}${asset.name}${pin}`);
+  }
+  lines.push('');
+  lines.push('### Tags');
+  lines.push('');
+  lines.push(bundle.tags && bundle.tags.length > 0 ? bundle.tags.join(', ') : 'none');
+  lines.push('');
+  lines.push('### Files');
+  lines.push('');
+  for (const file of listedFiles) lines.push(`- ${file}`);
+  lines.push('');
+  lines.push('### Checklist');
+  lines.push('');
+  lines.push('- [ ] Bundle schema is valid');
+  lines.push('- [ ] All referenced assets exist in the registry');
+  lines.push('- [ ] Bundle installs cleanly via `atk install`');
+  lines.push('');
+  lines.push('---');
+  lines.push('*Published via the ATK contribute web flow*');
+  return lines.join('\n');
 }
 
 function generatePrBody(params: { listedFiles: string[]; manifest: Manifest }): string {

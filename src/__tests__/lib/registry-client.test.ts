@@ -8,6 +8,7 @@ import {
   fetchBundleManifest,
   fetchRegistry,
   findExistingAsset,
+  findExistingBundle,
 } from '@/lib/registry-client';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from '@/lib/registry-errors';
 
@@ -242,11 +243,22 @@ describe('registry-client (Octokit-backed)', () => {
       });
       const { octokit, spy } = makeFakeOctokit([bundleJson]);
 
-      const result = await fetchBundleManifest({ name: 'quality-bundle' }, { octokit, retry: fastRetry });
+      const result = await fetchBundleManifest(
+        { name: 'quality-bundle', version: '0.3.0' },
+        { octokit, retry: fastRetry },
+      );
       expect(result.name).toBe('quality-bundle');
       expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ path: 'bundles/quality-bundle/bundle.json' }),
+        expect.objectContaining({ path: 'bundles/quality-bundle/0.3.0/bundle.json' }),
       );
+    });
+  });
+
+  describe('findExistingBundle', () => {
+    it('returns the latest version for an existing bundle and undefined otherwise', () => {
+      const registry = loadFixtureRegistry();
+      expect(findExistingBundle(registry, { name: 'feature-workflow' })).toEqual({ latest: '1.0.0' });
+      expect(findExistingBundle(registry, { name: 'does-not-exist' })).toBeUndefined();
     });
   });
 

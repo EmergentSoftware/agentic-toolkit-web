@@ -14,7 +14,7 @@ export function useBundleManifest(
   options?: BundleManifestHookOptions,
 ): UseQueryResult<Bundle, Error> {
   const { octokit } = useSession();
-  const enabled = Boolean(octokit && ref.name);
+  const enabled = Boolean(octokit && ref.name && ref.version);
 
   return useQuery({
     enabled,

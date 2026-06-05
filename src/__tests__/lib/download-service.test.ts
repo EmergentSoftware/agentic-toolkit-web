@@ -235,6 +235,86 @@ describe('downloadAsset', () => {
     expect(entries['validate/manifest.json']).toBe(buildManifestBytes(primary));
   });
 
+  it('omits the top-level manifest.json and README.md and uses a .skill extension for format: skill', async () => {
+    const manifest: Manifest = {
+      author: 'EmergentSoftware',
+      description: 'a skill',
+      entrypoint: 'SKILL.md',
+      files: ['SKILL.md', 'references/data.md'],
+      name: 'my-skill',
+      type: 'skill',
+      version: '2.0.0',
+    };
+
+    const fetchMock = setupFetchForAssets([
+      {
+        files: {
+          'README.md': '# readme',
+          'references/data.md': 'data',
+          'SKILL.md': '# skill',
+        },
+        manifest,
+      },
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const trigger = vi.fn();
+    const result = await downloadAsset(
+      { name: 'my-skill', type: 'skill', version: '2.0.0' },
+      { format: 'skill', retry: fastRetry, triggerDownload: trigger },
+    );
+
+    expect(result.filename).toBe('my-skill-2.0.0.skill');
+    const entries = await readZipEntries(result.blob);
+    expect(Object.keys(entries).sort()).toEqual([
+      'my-skill/SKILL.md',
+      'my-skill/references/data.md',
+    ]);
+    expect(entries['my-skill/SKILL.md']).toBe('# skill');
+    expect(entries['my-skill/references/data.md']).toBe('data');
+    expect(trigger).toHaveBeenCalledWith(result.blob, 'my-skill-2.0.0.skill');
+  });
+
+  it('strips metadata only from the top-level skill, leaving dependency manifests intact for format: skill', async () => {
+    const primary: Manifest = {
+      author: 'EmergentSoftware',
+      dependencies: [{ name: 'dev-commands-rule', type: 'rule', version: '1.2.0' }],
+      description: 'primary',
+      entrypoint: 'SKILL.md',
+      name: 'my-skill',
+      type: 'skill',
+      version: '1.0.0',
+    };
+    const dep: Manifest = {
+      author: 'EmergentSoftware',
+      description: 'dep',
+      entrypoint: 'RULE.md',
+      name: 'dev-commands-rule',
+      type: 'rule',
+      version: '1.2.0',
+    };
+
+    const fetchMock = setupFetchForAssets([
+      { files: { 'README.md': 'primary readme', 'SKILL.md': 'skill body' }, manifest: primary },
+      { files: { 'README.md': 'dep readme', 'RULE.md': 'rule body' }, manifest: dep },
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { blob } = await downloadAsset(
+      { name: 'my-skill', type: 'skill', version: '1.0.0' },
+      { format: 'skill', retry: fastRetry, triggerDownload: vi.fn() },
+    );
+
+    const entries = await readZipEntries(blob);
+    expect(Object.keys(entries).sort()).toEqual([
+      'dependencies/dev-commands-rule/README.md',
+      'dependencies/dev-commands-rule/RULE.md',
+      'dependencies/dev-commands-rule/manifest.json',
+      'my-skill/SKILL.md',
+    ]);
+    expect(entries['dependencies/dev-commands-rule/manifest.json']).toBe(buildManifestBytes(dep));
+  });
+
   it('deduplicates dependencies encountered via multiple paths and guards against cycles', async () => {
     const a: Manifest = {
       author: 'x',
@@ -350,8 +430,8 @@ describe('downloadAsset', () => {
   });
 });
 
-function buildBundleUrl(name: string): string {
-  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/bundles/${encodeURIComponent(name)}/bundle.json`;
+function buildBundleUrl(name: string, version: string): string {
+  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/bundles/${encodeURIComponent(name)}/${encodeURIComponent(version)}/bundle.json`;
 }
 
 describe('downloadBundle', () => {
@@ -402,7 +482,7 @@ describe('downloadBundle', () => {
       },
     ]);
 
-    const bundleUrl = buildBundleUrl('feature-workflow');
+    const bundleUrl = buildBundleUrl('feature-workflow', '1.0.0');
     const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
       return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
@@ -414,6 +494,7 @@ describe('downloadBundle', () => {
       resolveVersion: (member) => (member.name === 'clarification-agent' ? '1.0.0' : undefined),
       retry: fastRetry,
       triggerDownload: trigger,
+      version: '1.0.0',
     });
 
     expect(result.filename).toBe('feature-workflow-1.0.0.zip');
@@ -447,7 +528,7 @@ describe('downloadBundle', () => {
     };
 
     const assetFetch = setupFetchForAssets([{ files: { 'AGENT.md': 'body' }, manifest }]);
-    const bundleUrl = buildBundleUrl('tiny');
+    const bundleUrl = buildBundleUrl('tiny', '0.1.0');
     const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
       return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
@@ -459,6 +540,7 @@ describe('downloadBundle', () => {
       resolveVersion,
       retry: fastRetry,
       triggerDownload: vi.fn(),
+      version: '0.1.0',
     });
 
     expect(resolveVersion).toHaveBeenCalledTimes(1);
@@ -474,7 +556,7 @@ describe('downloadBundle', () => {
       name: 'broken',
       version: '0.1.0',
     };
-    const bundleUrl = buildBundleUrl('broken');
+    const bundleUrl = buildBundleUrl('broken', '0.1.0');
     const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
       return new Response('', { status: 404 });
@@ -482,7 +564,7 @@ describe('downloadBundle', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      downloadBundle('broken', { retry: fastRetry, triggerDownload: vi.fn() }),
+      downloadBundle('broken', { retry: fastRetry, triggerDownload: vi.fn(), version: '0.1.0' }),
     ).rejects.toThrow(/missing a version/);
   });
 
@@ -491,7 +573,7 @@ describe('downloadBundle', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      downloadBundle('missing-bundle', { retry: fastRetry, triggerDownload: vi.fn() }),
+      downloadBundle('missing-bundle', { retry: fastRetry, triggerDownload: vi.fn(), version: '1.0.0' }),
     ).rejects.toBeInstanceOf(RegistryNotFoundError);
   });
 });

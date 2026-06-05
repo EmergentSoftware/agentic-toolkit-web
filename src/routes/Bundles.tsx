@@ -230,7 +230,7 @@ export function BundlesRoute() {
               name={row.original.name}
               onClick={(event) => {
                 event.stopPropagation();
-                void download(row.original.name, { resolveVersion });
+                void download(row.original.name, { resolveVersion, version: row.original.version });
               }}
             />
           );
@@ -285,6 +285,16 @@ export function BundlesRoute() {
   return (
     <>
       <PageHeader
+        actions={
+          <Button
+            data-testid='create-bundle-link'
+            onClick={() => navigate('/bundles/new')}
+            size='sm'
+            type='button'
+          >
+            Create bundle
+          </Button>
+        }
         description='Search and download curated bundles that group related assets into a single installable unit.'
         title='Browse bundles'
       />
@@ -389,7 +399,7 @@ export function BundlesRoute() {
           <BundlesCardList
             isDownloading={isDownloading}
             onCardClick={navigateToBundle}
-            onDownload={(row) => void download(row.name, { resolveVersion })}
+            onDownload={(row) => void download(row.name, { resolveVersion, version: row.version })}
             rows={rows}
           />
         </>
