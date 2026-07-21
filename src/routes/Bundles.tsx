@@ -38,6 +38,8 @@ interface BundleRow {
   assetCount: number;
   author: string;
   description: string;
+  /** Distinct bare orgs of this bundle's members (for the global-with-org-members hint, W2). */
+  memberOrgs: string[];
   name: string;
   org: string;
   tags: string[];
@@ -62,7 +64,7 @@ const SHOW_ORG_SCOPED_STORAGE_KEY = 'atk.bundles.showOrgScoped';
 const DEFAULT_COLUMN_VISIBILITY: VisibilityState = { author: false, tags: false };
 
 interface BundlesCardListProps {
-  isDownloading: (name: string) => boolean;
+  isDownloading: (name: string, org?: string) => boolean;
   onCardClick: (row: BundleRow) => void;
   onDownload: (row: BundleRow, format: DownloadFormat) => void;
   rows: BundleRow[];
@@ -214,7 +216,7 @@ export function BundlesRoute() {
               {row.original.org}
             </Badge>
           ) : (
-            <span className='text-xs text-muted-foreground'>global</span>
+            <OrgScopeCell memberOrgs={row.original.memberOrgs} name={row.original.name} />
           ),
         header: 'Org scope',
       },
@@ -225,7 +227,8 @@ export function BundlesRoute() {
       },
       {
         cell: ({ row }) => {
-          const loading = isDownloading(row.original.name);
+          const bundleOrg = row.original.org || undefined;
+          const loading = isDownloading(row.original.name, bundleOrg);
           return (
             <DownloadMenu
               enableSkillFormat
@@ -234,6 +237,7 @@ export function BundlesRoute() {
               onDownload={(format) =>
                 void download(row.original.name, {
                   format,
+                  org: bundleOrg,
                   resolveVersion,
                   version: row.original.version,
                 })
@@ -264,7 +268,12 @@ export function BundlesRoute() {
     state: { columnVisibility, sorting },
   });
 
-  const navigateToBundle = (row: BundleRow) => navigate(`/bundles/${encodeURIComponent(row.name)}`);
+  const navigateToBundle = (row: BundleRow) =>
+    navigate(
+      row.org
+        ? `/bundles/${encodeURIComponent(row.org)}/${encodeURIComponent(row.name)}`
+        : `/bundles/${encodeURIComponent(row.name)}`,
+    );
 
   const setSearch = (value: string) => void setFilters({ q: value });
   const setTagFilter = (next: Set<string>) => void setFilters({ tags: [...next] });
@@ -408,7 +417,12 @@ export function BundlesRoute() {
             isDownloading={isDownloading}
             onCardClick={navigateToBundle}
             onDownload={(row, format) =>
-              void download(row.name, { format, resolveVersion, version: row.version })
+              void download(row.name, {
+                format,
+                org: row.org || undefined,
+                resolveVersion,
+                version: row.version,
+              })
             }
             rows={rows}
           />
@@ -461,7 +475,7 @@ function BundlesCardList({ isDownloading, onCardClick, onDownload, rows }: Bundl
                     {row.org}
                   </Badge>
                 ) : (
-                  <span>global</span>
+                  <OrgScopeCell memberOrgs={row.memberOrgs} name={row.name} />
                 )}
               </div>
               {row.tags.length > 0 ? (
@@ -476,7 +490,7 @@ function BundlesCardList({ isDownloading, onCardClick, onDownload, rows }: Bundl
               ) : null}
               <DownloadMenu
                 enableSkillFormat
-                isLoading={isDownloading(row.name)}
+                isLoading={isDownloading(row.name, row.org || undefined)}
                 name={row.name}
                 onDownload={(format) => onDownload(row, format)}
                 stopPropagation
@@ -661,6 +675,27 @@ function loadShowOrgScoped(): boolean {
   }
 }
 
+/**
+ * Org-scope cell for a global bundle. When the bundle itself is global but
+ * carries org-scoped members, surface a hint so users know downloading it pulls
+ * org-scoped assets (audit W2 — the "global bundle with org members" blind spot).
+ */
+function OrgScopeCell({ memberOrgs, name }: { memberOrgs: string[]; name: string }) {
+  if (memberOrgs.length === 0) {
+    return <span className='text-xs text-muted-foreground'>global</span>;
+  }
+  return (
+    <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
+      global
+      <Tooltip content={`Includes org-scoped members: ${memberOrgs.join(', ')}`}>
+        <Badge data-testid={`bundle-scoped-hint-${name}`} shape='pill' variant='secondary'>
+          +{memberOrgs.length} org
+        </Badge>
+      </Tooltip>
+    </span>
+  );
+}
+
 function parseSort(value: string): SortingState {
   if (!value) return [];
   const [id, dir] = value.split(':');
@@ -676,10 +711,14 @@ function serializeSort(state: SortingState): string {
 }
 
 function toRow(bundle: RegistryBundle): BundleRow {
+  const memberOrgs = [
+    ...new Set((bundle.assets ?? []).map((a) => a.org).filter((o): o is string => Boolean(o))),
+  ].sort();
   return {
     assetCount: bundle.assetCount,
     author: bundle.author,
     description: bundle.description,
+    memberOrgs,
     name: bundle.name,
     org: bundle.org ?? '',
     tags: bundle.tags,

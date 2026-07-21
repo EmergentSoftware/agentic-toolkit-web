@@ -7,7 +7,7 @@ import { useToast } from './useToast';
 
 export interface UseDownloadBundleResult {
   download: (name: string, options: DownloadBundleOptions) => Promise<void>;
-  isDownloading: (name: string) => boolean;
+  isDownloading: (name: string, org?: string) => boolean;
 }
 
 /**
@@ -41,8 +41,9 @@ export function useDownloadBundle(): UseDownloadBundleResult {
 
   const download = useCallback(
     async (name: string, options: DownloadBundleOptions) => {
-      if (inFlightRef.current.has(name)) return;
-      markStart(name);
+      const key = bundleKey(name, options.org);
+      if (inFlightRef.current.has(key)) return;
+      markStart(key);
       try {
         await downloadBundle(name, { ...(token ? { token } : {}), ...options });
         toast.add({
@@ -57,13 +58,21 @@ export function useDownloadBundle(): UseDownloadBundleResult {
           title: `Failed to download ${name}`,
         });
       } finally {
-        markDone(name);
+        markDone(key);
       }
     },
     [markDone, markStart, toast, token],
   );
 
-  const isDownloading = useCallback((name: string) => inFlight.has(name), [inFlight]);
+  const isDownloading = useCallback(
+    (name: string, org?: string) => inFlight.has(bundleKey(name, org)),
+    [inFlight],
+  );
 
   return { download, isDownloading };
+}
+
+/** In-flight key that keeps same-named bundles in different orgs distinct. */
+function bundleKey(name: string, org?: string): string {
+  return `${org ?? ''}:${name}`;
 }

@@ -430,8 +430,11 @@ describe('downloadAsset', () => {
   });
 });
 
-function buildBundleUrl(name: string, version: string): string {
-  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/bundles/${encodeURIComponent(name)}/${encodeURIComponent(version)}/bundle.json`;
+function buildBundleUrl(name: string, version: string, org?: string): string {
+  const parts = ['bundles'];
+  if (org) parts.push(`@${encodeURIComponent(org)}`);
+  parts.push(encodeURIComponent(name), encodeURIComponent(version), 'bundle.json');
+  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/${parts.join('/')}`;
 }
 
 describe('downloadBundle', () => {
@@ -649,5 +652,73 @@ describe('downloadBundle', () => {
     await expect(
       downloadBundle('missing-bundle', { retry: fastRetry, triggerDownload: vi.fn(), version: '1.0.0' }),
     ).rejects.toBeInstanceOf(RegistryNotFoundError);
+  });
+
+  it('fetches an org-scoped bundle manifest from its @org path (W1)', async () => {
+    const bundle: Bundle = {
+      assets: [{ name: 'clarification-agent', type: 'agent', version: '1.0.0' }],
+      author: 'cupay',
+      description: 'qa bundle',
+      name: 'qa-bundle',
+      org: 'cupay',
+      version: '1.0.0',
+    };
+    const manifest: Manifest = {
+      author: 'community',
+      description: 'clarifier',
+      entrypoint: 'AGENT.md',
+      files: ['AGENT.md'],
+      name: 'clarification-agent',
+      type: 'agent',
+      version: '1.0.0',
+    };
+
+    const assetFetch = setupFetchForAssets([{ files: { 'AGENT.md': 'body' }, manifest }]);
+    const bundleUrl = buildBundleUrl('qa-bundle', '1.0.0', 'cupay');
+    const seen: string[] = [];
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      seen.push(String(url));
+      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
+      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { filename } = await downloadBundle('qa-bundle', {
+      org: 'cupay',
+      retry: fastRetry,
+      triggerDownload: vi.fn(),
+      version: '1.0.0',
+    });
+
+    expect(filename).toBe('qa-bundle-1.0.0.zip');
+    expect(seen).toContain(bundleUrl);
+  });
+
+  it('reports an org-scoped member that resolves to no asset as not-found-in-org (W4)', async () => {
+    const bundle: Bundle = {
+      assets: [{ name: 'login-helper', org: 'cupay', type: 'skill' }],
+      author: 'cupay',
+      description: 'b',
+      name: 'qa-bundle',
+      org: 'cupay',
+      version: '1.0.0',
+    };
+    const bundleUrl = buildBundleUrl('qa-bundle', '1.0.0', 'cupay');
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
+      return new Response('', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      downloadBundle('qa-bundle', {
+        org: 'cupay',
+        // Resolver finds no matching asset in scope → undefined version.
+        resolveVersion: () => undefined,
+        retry: fastRetry,
+        triggerDownload: vi.fn(),
+        version: '1.0.0',
+      }),
+    ).rejects.toThrow(/not found in org 'cupay'/);
   });
 });

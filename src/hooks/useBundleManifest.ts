@@ -22,6 +22,6 @@ export function useBundleManifest(
       if (!octokit) throw new Error('useBundleManifest: no authenticated Octokit client available');
       return fetchBundleManifest(ref as BundleManifestRef, { ...options, octokit, signal });
     },
-    queryKey: queryKeys.bundleManifest({ name: ref.name ?? '', version: ref.version }),
+    queryKey: queryKeys.bundleManifest({ name: ref.name ?? '', org: ref.org, version: ref.version }),
   });
 }

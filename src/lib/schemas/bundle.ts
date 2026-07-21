@@ -17,6 +17,7 @@ export const BundleSchema = z.object({
   description: z.string().describe('What this bundle provides'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Arbitrary additional metadata'),
   name: z.string().describe('Unique bundle name (kebab-case)'),
+  org: z.string().optional().describe('Organization scope for this bundle (bare, no @)'),
   setupInstructions: z.string().optional().describe('Post-install setup instructions (markdown)'),
   tags: z.array(z.string()).optional().describe('Searchable tags'),
   version: z.string().describe('Semver version string'),

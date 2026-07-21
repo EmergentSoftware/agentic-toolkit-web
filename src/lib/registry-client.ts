@@ -3,6 +3,11 @@ import type { ZodType } from 'zod';
 
 import { callWithRetry, type RetryOptions } from './fetch-retry';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
+import {
+  assetPathSegments,
+  bundlePathSegments,
+  toRegistryPath,
+} from './registry-paths';
 import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 import { type Registry, RegistrySchema } from './schemas/registry';
 
@@ -20,7 +25,12 @@ export interface AssetManifestRef {
 /** A pointer to a specific bundle version in the registry. */
 export interface BundleManifestRef {
   name: string;
-  /** Bundle version — resolves to `bundles/{name}/{version}/bundle.json`. Take it from the registry index entry's `version`. */
+  /**
+   * Bare org name (no `@`) for org-scoped bundles; omit for global bundles.
+   * An org-scoped bundle resolves under `bundles/@{org}/{name}/{version}/`.
+   */
+  org?: string;
+  /** Bundle version — resolves to `bundles/[@{org}/]{name}/{version}/bundle.json`. Take it from the registry index entry's `version`. */
   version: string;
 }
 
@@ -70,7 +80,9 @@ export async function fetchBundleManifest(
   ref: BundleManifestRef,
   options: RegistryClientOptions,
 ): Promise<Bundle> {
-  const path = `bundles/${ref.name}/${ref.version}/bundle.json`;
+  const path = toRegistryPath(
+    bundlePathSegments({ name: ref.name, org: ref.org, version: ref.version }),
+  );
   return await fetchAndParse<Bundle>(path, BundleSchema, options);
 }
 
@@ -98,25 +110,24 @@ export function findExistingAsset(
 }
 
 /**
- * Look up a bundle in the registry index by name. Bundles are always global, so
- * the match is by name alone. Returns the latest published version, or undefined
- * when the bundle does not exist yet.
+ * Look up a bundle in the registry index using strict, symmetric scope
+ * matching (mirrors {@link findExistingAsset}): an org-scoped query matches
+ * only bundles in the same org; an unscoped query matches only global bundles.
+ * Cross-scope name collisions are never reported as matches. Returns the latest
+ * published version and the matched bundle's org, or undefined when absent.
  */
 export function findExistingBundle(
   registry: Registry,
-  query: { name: string },
-): undefined | { latest: string } {
-  const match = registry.bundles?.find((b) => b.name === query.name);
+  query: { name: string; org?: string },
+): undefined | { latest: string; org?: string } {
+  const { name, org } = query;
+  const match = registry.bundles?.find((b) => b.name === name && b.org === (org || undefined));
   if (!match) return undefined;
-  return { latest: match.version };
+  return { latest: match.version, org: match.org };
 }
 
 function buildAssetManifestPath(ref: AssetManifestRef): string {
-  const typeDir = `${ref.type}s`;
-  const parts = ['assets', typeDir];
-  if (ref.org) parts.push(`@${ref.org}`);
-  parts.push(ref.name, ref.version, 'manifest.json');
-  return parts.join('/');
+  return toRegistryPath(assetPathSegments(ref, 'manifest.json'));
 }
 
 function buildResourceLabel(path: string, options: RegistryClientOptions): string {

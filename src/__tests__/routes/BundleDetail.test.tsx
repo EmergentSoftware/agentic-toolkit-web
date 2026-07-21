@@ -42,6 +42,7 @@ function renderAt(path: string) {
         <MemoryRouter initialEntries={[path]}>
           <Routes>
             <Route element={children} path='/bundles/:bundleId' />
+            <Route element={children} path='/bundles/:org/:name' />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -163,5 +164,102 @@ describe('BundleDetailRoute', () => {
 
     expect(screen.getByTestId('bundle-detail-error')).toBeInTheDocument();
     expect(screen.getByText(/boom/i)).toBeInTheDocument();
+  });
+
+  it('resolves an org-scoped bundle from /bundles/:org/:name and titles it @org/name', () => {
+    const orgBundle: Bundle = {
+      assets: [{ name: 'login-helper', org: 'cupay', type: 'skill', version: '1.0.0' }],
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      tags: ['qa'],
+      version: '2.0.0',
+    };
+    const registry = loadFixtureRegistry();
+    registry.bundles!.push({
+      assetCount: 1,
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      tags: ['qa'],
+      version: '2.0.0',
+    });
+    setBundle({ data: orgBundle, isSuccess: true });
+    setRegistry({ data: registry, isSuccess: true });
+
+    renderAt('/bundles/cupay/qa-bundle');
+
+    expect(screen.getByRole('heading', { level: 1, name: '@cupay/qa-bundle' })).toBeInTheDocument();
+    // The manifest hook is queried with the parsed bare org + resolved version.
+    expect(useBundleManifestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'qa-bundle', org: 'cupay', version: '2.0.0' }),
+    );
+    expect(screen.getByTestId('bundle-detail-org')).toHaveTextContent('cupay');
+  });
+
+  it('passes the bundle org to the download hook for an org-scoped bundle', () => {
+    const download = vi.fn().mockResolvedValue(undefined);
+    useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
+    const orgBundle: Bundle = {
+      assets: [{ name: 'login-helper', org: 'cupay', type: 'skill', version: '1.0.0' }],
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      version: '2.0.0',
+    };
+    const registry = loadFixtureRegistry();
+    registry.bundles!.push({
+      assetCount: 1,
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      tags: [],
+      version: '2.0.0',
+    });
+    setBundle({ data: orgBundle, isSuccess: true });
+    setRegistry({ data: registry, isSuccess: true });
+
+    renderAt('/bundles/cupay/qa-bundle');
+
+    fireEvent.click(screen.getByTestId('bundle-detail-download'));
+    fireEvent.click(screen.getByTestId('bundle-detail-download-zip'));
+
+    expect(download).toHaveBeenCalledWith(
+      'qa-bundle',
+      expect.objectContaining({ format: 'zip', org: 'cupay', version: '2.0.0' }),
+    );
+  });
+
+  it('explains an unresolved org-scoped member instead of a bare "unresolved" (W4)', () => {
+    const orgBundle: Bundle = {
+      // login-helper@cupay is absent from the fixture registry → unresolved.
+      assets: [{ name: 'login-helper', org: 'cupay', type: 'skill' }],
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      version: '2.0.0',
+    };
+    const registry = loadFixtureRegistry();
+    registry.bundles!.push({
+      assetCount: 1,
+      author: 'cupay',
+      description: 'QA bundle.',
+      name: 'qa-bundle',
+      org: 'cupay',
+      tags: [],
+      version: '2.0.0',
+    });
+    setBundle({ data: orgBundle, isSuccess: true });
+    setRegistry({ data: registry, isSuccess: true });
+
+    renderAt('/bundles/cupay/qa-bundle');
+
+    const memberCard = screen.getByTestId('bundle-member-login-helper');
+    expect(memberCard).toHaveTextContent(/not found in org 'cupay'/i);
   });
 });
