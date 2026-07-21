@@ -107,6 +107,16 @@ export function App() {
                 />
                 <Route
                   element={
+                    <RouteBoundary scope='Bundle detail'>
+                      <RequireAuth>
+                        <BundleDetailRoute />
+                      </RequireAuth>
+                    </RouteBoundary>
+                  }
+                  path='bundles/:org/:name'
+                />
+                <Route
+                  element={
                     <RouteBoundary scope='Contribute'>
                       <RequireAuth>
                         <ContributeRoute />

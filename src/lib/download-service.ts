@@ -5,6 +5,12 @@ import type { BundleAssetRef } from './schemas/bundle';
 import { fetchWithRetry, type RetryOptions } from './fetch-retry';
 import { collectFilePaths } from './file-list';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
+import {
+  assetPathSegments,
+  bundlePathSegments,
+  encodePathSegment,
+  encodeRegistryPath,
+} from './registry-paths';
 import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 
 const DEFAULT_OWNER = 'EmergentSoftware';
@@ -40,13 +46,18 @@ export interface DownloadAssetOptions {
 
 export interface DownloadBundleOptions extends DownloadAssetOptions {
   /**
+   * Bare org name (no `@`) for org-scoped bundles; omit for global bundles.
+   * Locates the bundle under `bundles/@{org}/{name}/{version}/bundle.json`.
+   */
+  org?: string;
+  /**
    * Resolve a version for a bundle member that omits its own `version`.
    * Typically wired to the registry's `latest` field. Receives the member ref
    * exactly as it appears in `bundle.json`.
    */
   resolveVersion?: (member: BundleAssetRef) => string | undefined;
   /**
-   * The bundle's own version, used to locate `bundles/{name}/{version}/bundle.json`.
+   * The bundle's own version, used to locate `bundles/[@{org}/]{name}/{version}/bundle.json`.
    * Take it from the registry index entry's `version`.
    */
   version: string;
@@ -132,8 +143,12 @@ export async function downloadBundle(
   for (const member of bundle.assets) {
     const version = resolveMemberVersion(member, options);
     if (!version) {
+      // An org-scoped member that resolves to no version means no asset exists
+      // in that scope (audit W4) — report the scope, not a generic version miss.
       throw new Error(
-        `Bundle member ${member.type}:${member.name} is missing a version and no resolver provided one.`,
+        member.org
+          ? `Bundle member '${member.name}' (${member.type}) not found in org '${member.org}'.`
+          : `Bundle member ${member.type}:${member.name} is missing a version and no resolver provided one.`,
       );
     }
     const memberRef: AssetRef = { name: member.name, org: member.org, type: member.type, version };
@@ -184,23 +199,23 @@ function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle, exclude?: Set<st
 }
 
 function buildBundleManifestUrl(name: string, options: DownloadBundleOptions): string {
+  return buildContentsUrl(
+    bundlePathSegments({ name, org: options.org, version: options.version }),
+    options,
+  );
+}
+
+/** Compose a GitHub Contents API URL from raw registry path segments. */
+function buildContentsUrl(segments: string[], options: DownloadAssetOptions): string {
   const owner = options.owner ?? DEFAULT_OWNER;
   const repo = options.repo ?? DEFAULT_REPO;
-  const path = `bundles/${encodePathSegment(name)}/${encodePathSegment(options.version)}/bundle.json`;
+  const path = encodeRegistryPath(segments);
   const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${path}`;
   return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
 }
 
 function buildFileUrl(ref: AssetRef, relativePath: string, options: DownloadAssetOptions): string {
-  const owner = options.owner ?? DEFAULT_OWNER;
-  const repo = options.repo ?? DEFAULT_REPO;
-  const typeDir = `${ref.type}s`;
-  const parts = ['assets', typeDir];
-  if (ref.org) parts.push(encodePathSegment(`@${ref.org}`));
-  parts.push(encodePathSegment(ref.name), encodePathSegment(ref.version));
-  for (const segment of relativePath.split('/')) parts.push(encodePathSegment(segment));
-  const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${parts.join('/')}`;
-  return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
+  return buildContentsUrl(assetPathSegments(ref, relativePath), options);
 }
 
 function decodeBase64(encoded: string): Uint8Array {
@@ -222,9 +237,6 @@ function defaultTriggerDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-function encodePathSegment(segment: string): string {
-  return encodeURIComponent(segment).replace(/%40/g, '@');
-}
 async function fetchAssetBundle(
   ref: AssetRef,
   options: DownloadAssetOptions,

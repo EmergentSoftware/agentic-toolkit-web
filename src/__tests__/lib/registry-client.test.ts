@@ -252,13 +252,62 @@ describe('registry-client (Octokit-backed)', () => {
         expect.objectContaining({ path: 'bundles/quality-bundle/0.3.0/bundle.json' }),
       );
     });
+
+    it('builds an @org-scoped path for an org bundle', async () => {
+      const bundleJson = JSON.stringify({
+        assets: [{ name: 'dev-commands-rule', type: 'rule' }],
+        author: 'cupay',
+        description: 'd',
+        name: 'qa-bundle',
+        org: 'cupay',
+        version: '1.0.0',
+      });
+      const { octokit, spy } = makeFakeOctokit([bundleJson]);
+
+      const result = await fetchBundleManifest(
+        { name: 'qa-bundle', org: 'cupay', version: '1.0.0' },
+        { octokit, retry: fastRetry },
+      );
+      expect(result.name).toBe('qa-bundle');
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ path: 'bundles/@cupay/qa-bundle/1.0.0/bundle.json' }),
+      );
+    });
   });
 
   describe('findExistingBundle', () => {
-    it('returns the latest version for an existing bundle and undefined otherwise', () => {
+    it('returns the latest version for an existing global bundle and undefined otherwise', () => {
       const registry = loadFixtureRegistry();
-      expect(findExistingBundle(registry, { name: 'feature-workflow' })).toEqual({ latest: '1.0.0' });
+      expect(findExistingBundle(registry, { name: 'feature-workflow' })).toEqual({
+        latest: '1.0.0',
+        org: undefined,
+      });
       expect(findExistingBundle(registry, { name: 'does-not-exist' })).toBeUndefined();
+    });
+
+    it('matches org-scoped bundles strictly and never falls back across scope', () => {
+      const registry = loadFixtureRegistry();
+      registry.bundles!.push({
+        assetCount: 1,
+        author: 'cupay',
+        description: 'qa',
+        name: 'qa-bundle',
+        org: 'cupay',
+        tags: [],
+        version: '1.0.0',
+      });
+
+      // Exact org match resolves.
+      expect(findExistingBundle(registry, { name: 'qa-bundle', org: 'cupay' })).toEqual({
+        latest: '1.0.0',
+        org: 'cupay',
+      });
+      // An unscoped query must not match an org bundle…
+      expect(findExistingBundle(registry, { name: 'qa-bundle' })).toBeUndefined();
+      // …and an org query must not match a global bundle.
+      expect(findExistingBundle(registry, { name: 'feature-workflow', org: 'cupay' })).toBeUndefined();
+      // A different org does not match.
+      expect(findExistingBundle(registry, { name: 'qa-bundle', org: 'acme' })).toBeUndefined();
     });
   });
 

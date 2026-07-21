@@ -24,15 +24,27 @@ import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { bumpVersion } from '@/lib/version-utils';
 
 export function BundleDetailRoute() {
-  const { bundleId } = useParams<{ bundleId: string }>();
+  // Global bundles route as `/bundles/:bundleId`; org-scoped bundles as
+  // `/bundles/:org/:name` (bare org, no `@` in the URL — §2 convention).
+  const { bundleId, name: nameParam, org: orgParam } = useParams<{
+    bundleId?: string;
+    name?: string;
+    org?: string;
+  }>();
+  const bundleName = orgParam ? nameParam : bundleId;
+  const bundleOrg = orgParam;
   const navigate = useNavigate();
   const registryQuery = useRegistry();
   const bundleVersion = useMemo(
-    () => registryQuery.data?.bundles?.find((bundle) => bundle.name === bundleId)?.version,
-    [registryQuery.data, bundleId],
+    () =>
+      registryQuery.data?.bundles?.find(
+        (bundle) => bundle.name === bundleName && (bundle.org ?? undefined) === bundleOrg,
+      )?.version,
+    [registryQuery.data, bundleName, bundleOrg],
   );
-  const manifestQuery = useBundleManifest({ name: bundleId, version: bundleVersion });
+  const manifestQuery = useBundleManifest({ name: bundleName, org: bundleOrg, version: bundleVersion });
   const { download, isDownloading } = useDownloadBundle();
+  const displayName = bundleOrg && bundleName ? `@${bundleOrg}/${bundleName}` : bundleName;
 
   const editNewVersion = useCallback(
     (bundle: Bundle) => {
@@ -87,7 +99,7 @@ export function BundleDetailRoute() {
   );
   const manifestGraph = useManifestGraph(memberRefs);
 
-  if (!bundleId) {
+  if (!bundleName) {
     return (
       <>
         <PageHeader title='Bundle detail' />
@@ -103,7 +115,7 @@ export function BundleDetailRoute() {
   if (registryQuery.isLoading || manifestQuery.isLoading) {
     return (
       <>
-        <PageHeader title={bundleId} />
+        <PageHeader title={displayName} />
         <LoadingIndicator label='Loading bundle manifest…' variant='skeleton' />
       </>
     );
@@ -115,7 +127,7 @@ export function BundleDetailRoute() {
     }
     return (
       <>
-        <PageHeader title={bundleId} />
+        <PageHeader title={displayName} />
         <div
           className='rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm'
           data-testid='bundle-detail-error'
@@ -154,10 +166,15 @@ export function BundleDetailRoute() {
             </Button>
             <DownloadMenu
               enableSkillFormat
-              isLoading={isDownloading(manifest.name)}
+              isLoading={isDownloading(manifest.name, bundleOrg)}
               name={manifest.name}
               onDownload={(format) =>
-                void download(manifest.name, { format, resolveVersion, version: manifest.version })
+                void download(manifest.name, {
+                  format,
+                  org: bundleOrg,
+                  resolveVersion,
+                  version: manifest.version,
+                })
               }
               testId='bundle-detail-download'
             />
@@ -167,9 +184,14 @@ export function BundleDetailRoute() {
           <span className='flex flex-wrap items-center gap-2 text-muted-foreground'>
             <Badge variant='secondary'>bundle</Badge>
             <span>v{manifest.version}</span>
+            {bundleOrg ? (
+              <Badge data-testid='bundle-detail-org' variant='org'>
+                {bundleOrg}
+              </Badge>
+            ) : null}
           </span>
         }
-        title={manifest.name}
+        title={displayName}
       />
 
       <Card data-testid='bundle-detail-metadata'>
@@ -297,7 +319,13 @@ function BundleMemberCard({
         </div>
       </CardHeader>
       <CardContent className='flex flex-col gap-1 text-xs text-muted-foreground'>
-        <span>{version ? `v${version}` : 'version unresolved'}</span>
+        <span>
+          {version
+            ? `v${version}`
+            : member.org
+              ? `not found in org '${member.org}'`
+              : 'version unresolved'}
+        </span>
         {member.org ? <span>org: {member.org}</span> : null}
       </CardContent>
     </Card>

@@ -65,6 +65,10 @@ function renderBundles() {
                 element={<div data-testid='bundle-detail-route'>BUNDLE DETAIL</div>}
                 path='/bundles/:bundleId'
               />
+              <Route
+                element={<div data-testid='bundle-detail-org-route'>ORG BUNDLE DETAIL</div>}
+                path='/bundles/:org/:name'
+              />
             </Routes>
           </MemoryRouter>
         </QueryClientProvider>
@@ -174,12 +178,51 @@ describe('BundlesRoute', () => {
     expect(rows[0]).toHaveAttribute('data-testid', 'bundles-row-quality-bundle');
   });
 
-  it('navigates to /bundles/:bundleId when a row is clicked', () => {
+  it('navigates to /bundles/:bundleId when a global bundle row is clicked', () => {
     mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
     renderBundles();
 
     fireEvent.click(screen.getByTestId('bundles-row-feature-workflow'));
     expect(screen.getByTestId('bundle-detail-route')).toBeInTheDocument();
+  });
+
+  it('navigates to /bundles/:org/:name when an org-scoped bundle row is clicked', () => {
+    const fixture = loadFixtureRegistry();
+    fixture.bundles![1]!.org = 'cupay';
+    mockUseRegistry({ data: fixture, isSuccess: true });
+    renderBundles();
+
+    fireEvent.click(screen.getByTestId(`bundles-row-${fixture.bundles![1]!.name}`));
+    expect(screen.getByTestId('bundle-detail-org-route')).toBeInTheDocument();
+  });
+
+  it('hints that a global bundle carries org-scoped members (W2)', () => {
+    // The fixture's feature-workflow is global but references the org-scoped
+    // `validate` (org: agentic-toolkit) member.
+    mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    renderBundles();
+
+    expect(screen.getAllByTestId('bundle-scoped-hint-feature-workflow')[0]).toHaveTextContent(
+      /\+1 org/i,
+    );
+  });
+
+  it('passes the bundle org to the download hook for an org-scoped bundle (W3)', () => {
+    const download = vi.fn().mockResolvedValue(undefined);
+    useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
+    const fixture = loadFixtureRegistry();
+    fixture.bundles![1]!.org = 'cupay';
+    mockUseRegistry({ data: fixture, isSuccess: true });
+    renderBundles();
+
+    const name = fixture.bundles![1]!.name;
+    fireEvent.click(screen.getAllByTestId(`bundles-download-${name}`)[0]!);
+    fireEvent.click(screen.getAllByTestId(`bundles-download-${name}-zip`)[0]!);
+
+    expect(download).toHaveBeenCalledWith(
+      name,
+      expect.objectContaining({ format: 'zip', org: 'cupay' }),
+    );
   });
 
   it('invokes the download hook (with resolveVersion and format) when a row download option is chosen', () => {
