@@ -2,7 +2,7 @@ import type { ZodType } from 'zod';
 
 import { z } from 'zod';
 
-import { getAssetManifest, getAssetReadme, getBundleManifest, getRegistry, listAssetFiles } from './api';
+import { getAssetManifest, getAssetReadme, getBundleManifest, getBundleReadme, getRegistry, listAssetFiles } from './api';
 import { type ApiClient, ApiRequestError, type ApiResult, unwrap } from './api-client';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
 import { AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
@@ -112,6 +112,25 @@ export async function fetchBundleManifest(ref: BundleManifestRef, options: Regis
     signal: options.signal,
   });
   return parseResponse(unwrapRegistry(result, label), BundleSchema, label);
+}
+
+/**
+ * Fetch a bundle's `README.md` as raw markdown. Returns null when the README
+ * is absent (HTTP 404) so callers can degrade gracefully — mirrors
+ * {@link fetchAssetReadme}.
+ */
+export async function fetchBundleReadme(ref: BundleManifestRef, options: RegistryClientOptions): Promise<null | string> {
+  const label = `bundle ${ref.org ? `@${ref.org}/` : ''}${ref.name}@${ref.version} README`;
+  const result = await getBundleReadme({
+    client: options.client,
+    parseAs: 'text',
+    path: { name: ref.name, version: ref.version },
+    query: orgQuery(ref.org),
+    signal: options.signal,
+  });
+  if (result.response?.status === 404) return null;
+  const data = unwrapRegistry(result, label);
+  return typeof data === 'string' ? data : String(data);
 }
 
 /** Fetch and validate the registry index (`registry.json`) from the ATK API. */

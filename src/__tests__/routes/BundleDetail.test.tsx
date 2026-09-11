@@ -14,6 +14,7 @@ import { BundleDetailRoute } from '@/routes/BundleDetail';
 import { loadFixtureRegistry } from '../fixtures';
 
 const useBundleManifestMock = vi.hoisted(() => vi.fn());
+const useBundleReadmeMock = vi.hoisted(() => vi.fn());
 const useRegistryMock = vi.hoisted(() => vi.fn());
 const useDownloadBundleMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
@@ -29,6 +30,7 @@ const useManifestGraphMock = vi.hoisted(() =>
 );
 
 vi.mock('@/hooks/useBundleManifest', () => ({ useBundleManifest: useBundleManifestMock }));
+vi.mock('@/hooks/useBundleReadme', () => ({ useBundleReadme: useBundleReadmeMock }));
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 vi.mock('@/hooks/useDownloadBundle', () => ({ useDownloadBundle: useDownloadBundleMock }));
 vi.mock('@/hooks/useManifestGraph', () => ({
@@ -38,6 +40,7 @@ vi.mock('@/hooks/useManifestGraph', () => ({
 }));
 
 type BundleQueryShape = Partial<UseQueryResult<Bundle, Error>>;
+type ReadmeQueryShape = Partial<UseQueryResult<null | string, Error>>;
 type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;
 
 function renderAt(path: string) {
@@ -59,6 +62,17 @@ function renderAt(path: string) {
 
 function setBundle(state: BundleQueryShape) {
   useBundleManifestMock.mockReturnValue({
+    data: undefined,
+    error: null,
+    isError: false,
+    isLoading: false,
+    isSuccess: false,
+    ...state,
+  });
+}
+
+function setReadme(state: ReadmeQueryShape) {
+  useBundleReadmeMock.mockReturnValue({
     data: undefined,
     error: null,
     isError: false,
@@ -96,6 +110,7 @@ const FULL_BUNDLE: Bundle = {
 describe('BundleDetailRoute', () => {
   afterEach(() => {
     useBundleManifestMock.mockReset();
+    useBundleReadmeMock.mockReset();
     useRegistryMock.mockReset();
   });
 
@@ -108,6 +123,7 @@ describe('BundleDetailRoute', () => {
 
   it('renders every field of a fully populated bundle manifest', () => {
     setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setReadme({ data: '# Feature Workflow\n\nUsage notes.', isSuccess: true });
     setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
 
     renderAt('/bundles/feature-workflow');
@@ -132,11 +148,36 @@ describe('BundleDetailRoute', () => {
 
     const setup = screen.getByTestId('bundle-detail-setup');
     expect(within(setup).getByRole('heading', { level: 2, name: 'Setup' })).toBeInTheDocument();
+
+    const readme = screen.getByTestId('bundle-detail-readme');
+    expect(within(readme).getByRole('heading', { level: 1, name: 'Feature Workflow' })).toBeInTheDocument();
+    expect(within(readme).getByText('Usage notes.')).toBeInTheDocument();
+  });
+
+  it('shows a missing-README message when the bundle has none', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+
+    renderAt('/bundles/feature-workflow');
+
+    expect(screen.getByTestId('bundle-detail-readme-missing')).toBeInTheDocument();
+  });
+
+  it('shows a loading skeleton while the README is inflight', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setReadme({ isLoading: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+
+    renderAt('/bundles/feature-workflow');
+
+    expect(screen.getByRole('status', { name: /loading readme/i })).toBeInTheDocument();
   });
 
   it('lists bundle.json plus each member file from the API listing under the bundle group', () => {
     setBundle({ data: FULL_BUNDLE, isSuccess: true });
     setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
     const validateKey = 'agent:agentic-toolkit:validate:1.1.0';
     useManifestGraphMock.mockReturnValue({
       error: null,
@@ -179,6 +220,7 @@ describe('BundleDetailRoute', () => {
     const download = vi.fn().mockResolvedValue(undefined);
     useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
     setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
     setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
 
     renderAt('/bundles/feature-workflow');
@@ -231,6 +273,7 @@ describe('BundleDetailRoute', () => {
       version: '2.0.0',
     });
     setBundle({ data: orgBundle, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
     setRegistry({ data: registry, isSuccess: true });
 
     renderAt('/bundles/cupay/qa-bundle');
@@ -265,6 +308,7 @@ describe('BundleDetailRoute', () => {
       version: '2.0.0',
     });
     setBundle({ data: orgBundle, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
     setRegistry({ data: registry, isSuccess: true });
 
     renderAt('/bundles/cupay/qa-bundle');
@@ -299,6 +343,7 @@ describe('BundleDetailRoute', () => {
       version: '2.0.0',
     });
     setBundle({ data: orgBundle, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
     setRegistry({ data: registry, isSuccess: true });
 
     renderAt('/bundles/cupay/qa-bundle');

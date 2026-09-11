@@ -11,10 +11,12 @@ import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
+import { ReadmeView } from '@/components/ReadmeView';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useBundleManifest } from '@/hooks/useBundleManifest';
+import { useBundleReadme } from '@/hooks/useBundleReadme';
 import { useDownloadBundle } from '@/hooks/useDownloadBundle';
 import { refKey as manifestRefKey, useManifestGraph } from '@/hooks/useManifestGraph';
 import { useRegistry } from '@/hooks/useRegistry';
@@ -46,6 +48,7 @@ export function BundleDetailRoute() {
     [registryQuery.data, bundleName, bundleOrg],
   );
   const manifestQuery = useBundleManifest({ name: bundleName, org: bundleOrg, version: bundleVersion });
+  const readmeQuery = useBundleReadme({ name: bundleName, org: bundleOrg, version: bundleVersion });
   const { download, isDownloading } = useDownloadBundle();
   const displayName = bundleOrg && bundleName ? `@${bundleOrg}/${bundleName}` : bundleName;
 
@@ -249,6 +252,16 @@ export function BundleDetailRoute() {
           <MarkdownRenderer content={manifest.setupInstructions} />
         </section>
       ) : null}
+
+      <section aria-label='Bundle README' data-testid='bundle-detail-readme'>
+        <h2 className='mb-3 text-lg font-semibold tracking-tight text-foreground'>README</h2>
+        <ReadmeView
+          isError={readmeQuery.isError}
+          isLoading={readmeQuery.isLoading}
+          missingTestId='bundle-detail-readme-missing'
+          readme={readmeQuery.data ?? null}
+        />
+      </section>
     </div>
   );
 }
