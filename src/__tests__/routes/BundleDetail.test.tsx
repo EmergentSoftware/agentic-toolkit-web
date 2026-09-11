@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Bundle, Manifest, Registry } from '@/lib/schemas';
 
@@ -14,6 +14,7 @@ import { BundleDetailRoute } from '@/routes/BundleDetail';
 import { loadFixtureRegistry } from '../fixtures';
 
 const useBundleManifestMock = vi.hoisted(() => vi.fn());
+const useBundleReadmeMock = vi.hoisted(() => vi.fn());
 const useRegistryMock = vi.hoisted(() => vi.fn());
 const useDownloadBundleMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
@@ -29,6 +30,7 @@ const useManifestGraphMock = vi.hoisted(() =>
 );
 
 vi.mock('@/hooks/useBundleManifest', () => ({ useBundleManifest: useBundleManifestMock }));
+vi.mock('@/hooks/useBundleReadme', () => ({ useBundleReadme: useBundleReadmeMock }));
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 vi.mock('@/hooks/useDownloadBundle', () => ({ useDownloadBundle: useDownloadBundleMock }));
 vi.mock('@/hooks/useManifestGraph', () => ({
@@ -38,6 +40,7 @@ vi.mock('@/hooks/useManifestGraph', () => ({
 }));
 
 type BundleQueryShape = Partial<UseQueryResult<Bundle, Error>>;
+type ReadmeQueryShape = Partial<UseQueryResult<null | string, Error>>;
 type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;
 
 function renderAt(path: string) {
@@ -68,6 +71,17 @@ function setBundle(state: BundleQueryShape) {
   });
 }
 
+function setReadme(state: ReadmeQueryShape) {
+  useBundleReadmeMock.mockReturnValue({
+    data: null,
+    error: null,
+    isError: false,
+    isLoading: false,
+    isSuccess: true,
+    ...state,
+  });
+}
+
 function setRegistry(state: RegistryQueryShape) {
   useRegistryMock.mockReturnValue({
     data: undefined,
@@ -94,8 +108,14 @@ const FULL_BUNDLE: Bundle = {
 };
 
 describe('BundleDetailRoute', () => {
+  beforeEach(() => {
+    // Most cases don't care about the README; default to "none" so the section renders its fallback.
+    setReadme({});
+  });
+
   afterEach(() => {
     useBundleManifestMock.mockReset();
+    useBundleReadmeMock.mockReset();
     useRegistryMock.mockReset();
   });
 
@@ -132,6 +152,86 @@ describe('BundleDetailRoute', () => {
 
     const setup = screen.getByTestId('bundle-detail-setup');
     expect(within(setup).getByRole('heading', { level: 2, name: 'Setup' })).toBeInTheDocument();
+  });
+
+  it('renders the bundle README markdown ahead of the setup instructions', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({
+      data: [
+        '# Feature workflow',
+        '',
+        '## Usage',
+        '',
+        '- item one',
+        '- item two',
+        '',
+        '| Col A | Col B |',
+        '| --- | --- |',
+        '| a | b |',
+        '',
+        '```bash',
+        'atk install feature-workflow',
+        '```',
+        '',
+        '[Docs](https://example.com/docs)',
+      ].join('\n'),
+    });
+
+    renderAt('/bundles/feature-workflow');
+
+    const readme = screen.getByTestId('bundle-detail-readme');
+    expect(readme).toHaveAttribute('aria-label', 'Bundle README');
+    expect(within(readme).getByRole('heading', { level: 2, name: 'README' })).toBeInTheDocument();
+    expect(within(readme).getByRole('heading', { level: 1, name: 'Feature workflow' })).toBeInTheDocument();
+    expect(within(readme).getByRole('heading', { level: 2, name: 'Usage' })).toBeInTheDocument();
+    expect(within(readme).getByText('item one')).toBeInTheDocument();
+    expect(within(readme).getByRole('table')).toBeInTheDocument();
+    expect(within(readme).getByText('atk install feature-workflow')).toBeInTheDocument();
+    expect(within(readme).getByRole('link', { name: 'Docs' })).toHaveAttribute('href', 'https://example.com/docs');
+    expect(screen.queryByTestId('bundle-detail-readme-missing')).not.toBeInTheDocument();
+
+    // README precedes the setup instructions in document order.
+    const setup = screen.getByTestId('bundle-detail-setup');
+    expect(readme.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows a fallback when the bundle has no README', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: null });
+
+    renderAt('/bundles/feature-workflow');
+
+    expect(screen.getByTestId('bundle-detail-readme-missing')).toHaveTextContent(
+      /no readme is available for this bundle/i,
+    );
+    // Setup instructions still render independently of the README.
+    expect(screen.getByTestId('bundle-detail-setup')).toBeInTheDocument();
+  });
+
+  it('renders a README skeleton without blocking the rest of the page', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: undefined, isLoading: true, isSuccess: false });
+
+    renderAt('/bundles/feature-workflow');
+
+    expect(screen.getByRole('status', { name: /loading readme/i })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /loading bundle manifest/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('bundle-detail-metadata')).toBeInTheDocument();
+    expect(screen.getByTestId('bundle-detail-assets')).toBeInTheDocument();
+  });
+
+  it('treats a README fetch failure as a missing README, not a page error', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: undefined, error: new Error('boom'), isError: true, isSuccess: false });
+
+    renderAt('/bundles/feature-workflow');
+
+    expect(screen.getByTestId('bundle-detail-readme-missing')).toBeInTheDocument();
+    expect(screen.queryByTestId('bundle-detail-error')).not.toBeInTheDocument();
   });
 
   it('lists bundle.json plus each member file from the API listing under the bundle group', () => {
@@ -238,6 +338,10 @@ describe('BundleDetailRoute', () => {
     expect(screen.getByRole('heading', { level: 1, name: '@cupay/qa-bundle' })).toBeInTheDocument();
     // The manifest hook is queried with the parsed bare org + resolved version.
     expect(useBundleManifestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'qa-bundle', org: 'cupay', version: '2.0.0' }),
+    );
+    // The README hook receives the same org-scoped, registry-resolved ref.
+    expect(useBundleReadmeMock).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'qa-bundle', org: 'cupay', version: '2.0.0' }),
     );
     expect(screen.getByTestId('bundle-detail-org')).toHaveTextContent('cupay');

@@ -10,8 +10,8 @@ import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
 import { type FileGroup, FilesCard } from '@/components/FilesCard';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
-import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
+import { ReadmeSection } from '@/components/ReadmeSection';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAssetFiles } from '@/hooks/useAssetFiles';
@@ -230,10 +230,14 @@ export function AssetDetailRoute() {
         testId='asset-detail-files'
       />
 
-      <section aria-label='Asset README' data-testid='asset-detail-readme'>
-        <h2 className='mb-3 text-lg font-semibold tracking-tight text-foreground'>README</h2>
-        <ReadmeView isError={readmeQuery.isError} isLoading={readmeQuery.isLoading} readme={readmeQuery.data ?? null} />
-      </section>
+      <ReadmeSection
+        ariaLabel='Asset README'
+        emptyMessage='No README is available for this asset.'
+        isError={readmeQuery.isError}
+        isLoading={readmeQuery.isLoading}
+        readme={readmeQuery.data}
+        testId='asset-detail-readme'
+      />
     </div>
   );
 }
@@ -316,20 +320,6 @@ function MetadataRow({ children, label }: { children: React.ReactNode; label: st
       <div className='text-foreground'>{children}</div>
     </div>
   );
-}
-
-function ReadmeView({ isError, isLoading, readme }: { isError: boolean; isLoading: boolean; readme: null | string }) {
-  if (isLoading) {
-    return <LoadingIndicator label='Loading README…' variant='skeleton' />;
-  }
-  if (isError || !readme) {
-    return (
-      <p className='text-sm text-muted-foreground' data-testid='asset-detail-readme-missing'>
-        No README is available for this asset.
-      </p>
-    );
-  }
-  return <MarkdownRenderer content={readme} />;
 }
 
 function SecurityBlockView({ security }: { security: NonNullable<Manifest['security']> }) {

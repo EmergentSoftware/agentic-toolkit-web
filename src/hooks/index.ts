@@ -2,6 +2,7 @@ export { useAssetFiles } from './useAssetFiles';
 export { useAssetManifest } from './useAssetManifest';
 export { useAssetReadme } from './useAssetReadme';
 export { useBundleManifest } from './useBundleManifest';
+export { useBundleReadme } from './useBundleReadme';
 export { useDownloadAsset } from './useDownloadAsset';
 export { useDownloadBundle } from './useDownloadBundle';
 export { useRegistry } from './useRegistry';

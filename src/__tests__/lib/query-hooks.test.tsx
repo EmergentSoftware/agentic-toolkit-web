@@ -7,11 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '@/lib/api-client';
 
 import { useAssetFiles } from '@/hooks/useAssetFiles';
+import { useBundleReadme } from '@/hooks/useBundleReadme';
 import { useRegistry } from '@/hooks/useRegistry';
 import { queryKeys } from '@/lib/query-keys';
 
 import { loadFixtureRegistry } from '../fixtures';
-import { apiErrorResponse, jsonResponse, makeTestApiClient, stubFetch } from '../utils/api-stub';
+import { apiErrorResponse, jsonResponse, makeTestApiClient, stubFetch, textResponse } from '../utils/api-stub';
 
 // Intercept the session so we can feed the hooks a controlled API client (or null).
 const sessionValueMock: {
@@ -147,5 +148,56 @@ describe('useAssetFiles (TanStack Query)', () => {
     expect(result.current.data?.files.map((f) => f.path)).toEqual(['AGENT.md', 'manifest.json']);
     expect(calls[0]!.url).toBe('http://localhost:7071/assets/agent/validate/1.1.0/files?org=agentic-toolkit');
     expect(client.getQueryData(queryKeys.assetFiles(ref))).toBeDefined();
+  });
+});
+
+describe('useBundleReadme (TanStack Query)', () => {
+  beforeEach(() => {
+    sessionValueMock.api = null;
+    sessionValueMock.token = null;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('stays disabled until the registry has resolved a version', async () => {
+    sessionValueMock.api = makeTestApiClient('tok');
+    const { calls } = stubFetch(() => textResponse('# Hi'));
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useBundleReadme({ name: 'qa-bundle', org: 'cupay' }), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'));
+    expect(calls).toHaveLength(0);
+  });
+
+  it('fetches the README markdown under the bundleReadme key', async () => {
+    sessionValueMock.token = 'tok';
+    sessionValueMock.api = makeTestApiClient('tok');
+    const { calls } = stubFetch(() => textResponse('# Hi'));
+
+    const { client, Wrapper } = makeWrapper();
+    const ref = { name: 'qa-bundle', org: 'cupay', version: '1.0.0' };
+    const { result } = renderHook(() => useBundleReadme(ref), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBe('# Hi');
+    expect(calls[0]!.url).toBe('http://localhost:7071/bundles/qa-bundle/1.0.0/readme?org=cupay');
+    expect(client.getQueryData(queryKeys.bundleReadme(ref))).toBe('# Hi');
+  });
+
+  it('resolves to null when the bundle has no README', async () => {
+    sessionValueMock.token = 'tok';
+    sessionValueMock.api = makeTestApiClient('tok');
+    stubFetch(() => apiErrorResponse(404, 'not_found', 'No README'));
+
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useBundleReadme({ name: 'feature-workflow', version: '1.0.0' }), {
+      wrapper: Wrapper,
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
   });
 });

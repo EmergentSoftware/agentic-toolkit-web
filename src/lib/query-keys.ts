@@ -11,6 +11,8 @@ export const queryKeys = {
     ['registry', 'asset-readme', ref.type, ref.org ?? '', ref.name, ref.version] as const,
   bundleManifest: (ref: { name: string; org?: string; version?: string }) =>
     ['registry', 'bundle-manifest', ref.org ?? '', ref.name, ref.version ?? ''] as const,
+  bundleReadme: (ref: { name: string; org?: string; version?: string }) =>
+    ['registry', 'bundle-readme', ref.org ?? '', ref.name, ref.version ?? ''] as const,
   registry: () => ['registry', 'index'] as const,
   session: {
     membership: (org: string, username: string) => ['session', 'membership', org, username] as const,
