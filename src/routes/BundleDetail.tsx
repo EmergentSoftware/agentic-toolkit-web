@@ -65,13 +65,14 @@ export function BundleDetailRoute() {
         description: bundle.description,
         name: bundle.name,
         ...(bundle.org ? { org: bundle.org } : {}),
+        ...(readmeQuery.data ? { readme: readmeQuery.data } : {}),
         setupInstructions: bundle.setupInstructions,
         tags: bundle.tags,
         version: safeBumpMinor(bundle.version),
       };
       navigate('/bundles/new', { state: seed });
     },
-    [navigate],
+    [navigate, readmeQuery.data],
   );
 
   const resolveVersion = useCallback(

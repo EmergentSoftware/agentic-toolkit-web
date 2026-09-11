@@ -46,6 +46,8 @@ export interface BundleDraftState {
   name: string;
   /** Bare org name (no `@`) for an org-scoped bundle; empty for a global bundle. */
   org: string;
+  /** Markdown published as a sibling `README.md`, never as a field inside `bundle.json`. */
+  readme: string;
   setupInstructions: string;
   step: number;
   tags: string[];
@@ -60,6 +62,7 @@ export interface CreateBundleSeed {
   description: string;
   name: string;
   org?: string;
+  readme?: string;
   setupInstructions?: string;
   tags?: string[];
   version: string;
@@ -73,6 +76,7 @@ export interface VersionConflictState {
 const STEPS: StepperStep[] = [
   { description: 'Name, version, description, tags', id: 'metadata', title: 'Metadata' },
   { description: 'Pick the assets to bundle', id: 'assets', title: 'Assets' },
+  { description: 'Describe the bundle (optional, markdown)', id: 'readme', title: 'README' },
   { description: 'Optional post-install notes', id: 'setup', title: 'Setup' },
   { description: 'Validate and submit', id: 'review', title: 'Review' },
 ];
@@ -88,6 +92,7 @@ export function createInitialBundleDraft(author = ''): BundleDraftState {
     description: '',
     name: '',
     org: '',
+    readme: '',
     setupInstructions: '',
     step: 0,
     tags: [],
@@ -110,6 +115,8 @@ const PersistedDraftSchema = z.object({
   description: z.string(),
   name: z.string(),
   org: z.string().optional().default(''),
+  // Drafts persisted before the README step existed have no `readme` key.
+  readme: z.string().optional().default(''),
   setupInstructions: z.string(),
   step: z
     .number()
@@ -202,6 +209,7 @@ export function CreateBundleRoute() {
         description: seed.description,
         name: seed.name,
         org: seed.org ?? '',
+        readme: seed.readme ?? '',
         setupInstructions: seed.setupInstructions ?? '',
         tags: seed.tags ?? [],
         version: seed.version,
@@ -284,7 +292,7 @@ export function CreateBundleRoute() {
         client: api,
         dryRun,
         onProgress: (event) => setProgress(event),
-        readme: '',
+        readme: draft.readme,
       });
       skipNextPersistRef.current = true;
       clearBundleDraftFromStorage();
@@ -331,8 +339,9 @@ export function CreateBundleRoute() {
         {draft.step === 1 && (
           <StepAssets draft={draft} isLoading={registryQuery.isLoading} onChange={update} registry={registry} />
         )}
-        {draft.step === 2 && <StepSetup draft={draft} onChange={update} />}
-        {draft.step === 3 && <StepReview draft={draft} publishIssues={publishIssues} validation={validation} />}
+        {draft.step === 2 && <StepReadme draft={draft} onChange={update} />}
+        {draft.step === 3 && <StepSetup draft={draft} onChange={update} />}
+        {draft.step === 4 && <StepReview draft={draft} publishIssues={publishIssues} validation={validation} />}
         {submitting && progress ? (
           <div
             aria-live='polite'
@@ -365,7 +374,7 @@ export function CreateBundleRoute() {
       <ConfirmDialog
         cancelLabel='Cancel'
         confirmLabel='Start over'
-        description='All entered bundle data — metadata, selected assets, and setup notes — will be lost. This cannot be undone.'
+        description='All entered bundle data — metadata, selected assets, README, and setup notes — will be lost. This cannot be undone.'
         onConfirm={resetDraft}
         onOpenChange={setResetDialogOpen}
         open={resetDialogOpen}
@@ -416,8 +425,8 @@ function getStepValidity(draft: BundleDraftState): { canProceedFrom: boolean[]; 
     draft.author.trim().length > 0 &&
     draft.versionConflict.status !== 'conflict';
   const s1 = draft.assets.length > 0;
-  const s2 = true;
-  const canProceedFrom = [s0, s0 && s1, s0 && s1 && s2, false];
+  // README and Setup are both optional.
+  const canProceedFrom = [s0, s0 && s1, s0 && s1, s0 && s1, false];
   let highest = 0;
   for (let i = 0; i < canProceedFrom.length; i++) {
     if (canProceedFrom[i]) highest = i + 1;
@@ -767,6 +776,49 @@ function StepMetadata({ draft, onChange }: StepProps) {
   );
 }
 
+function StepReadme({ draft, onChange }: StepProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle id='create-bundle-step-heading'>Step 3 — README</CardTitle>
+      </CardHeader>
+      <CardContent className='space-y-3'>
+        <SectionHeader
+          description='Optional overview page for the bundle, published as README.md next to bundle.json and shown on the bundle page. Use the next step for post-install setup steps. Markdown supported, with a live preview.'
+          title='README'
+        />
+        <div className='grid gap-4 lg:grid-cols-2'>
+          <div className='space-y-1.5'>
+            <Label htmlFor='bundle-readme'>Markdown source</Label>
+            <Textarea
+              className='min-h-[320px] font-mono text-xs'
+              data-testid='field-readme'
+              id='bundle-readme'
+              onChange={(event) => onChange('readme', event.target.value)}
+              placeholder='# My bundle&#10;&#10;Describe what this bundle provides and when to use it...'
+              value={draft.readme}
+            />
+          </div>
+          <div className='space-y-1.5'>
+            <Label>Preview</Label>
+            <div
+              aria-label='README preview'
+              className='min-h-[320px] overflow-auto rounded-md border border-border bg-card p-4'
+              data-testid='readme-preview'
+            >
+              {draft.readme.trim() ? (
+                <MarkdownRenderer content={draft.readme} />
+              ) : (
+                <p className='text-sm text-muted-foreground'>Preview will appear here once you start typing.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function StepReview({
   draft,
   publishIssues,
@@ -778,14 +830,15 @@ function StepReview({
   validation: z.ZodSafeParseResult<Bundle>;
 }) {
   const bundleInput = buildBundleInput(draft);
+  const hasReadme = draft.readme.trim().length > 0;
   return (
     <Card>
       <CardHeader>
-        <CardTitle id='create-bundle-step-heading'>Step 4 — Review &amp; submit</CardTitle>
+        <CardTitle id='create-bundle-step-heading'>Step 5 — Review &amp; submit</CardTitle>
       </CardHeader>
       <CardContent className='space-y-5'>
         <SectionHeader
-          description='Verify the generated bundle.json and asset list before submitting.'
+          description='Verify the generated bundle.json, asset list, and README before submitting.'
           title='Review your bundle'
         />
         {draft.versionConflict.status === 'update' && draft.versionConflict.latestVersion ? (
@@ -803,6 +856,14 @@ function StepReview({
           >
             {JSON.stringify(bundleInput, null, 2)}
           </pre>
+        </div>
+        <div>
+          <h3 className='pb-2 text-sm font-semibold'>README.md</h3>
+          <p className='text-sm text-muted-foreground' data-testid='review-readme'>
+            {hasReadme
+              ? 'README provided — it will be published next to bundle.json.'
+              : 'No README — the bundle page will show a "no README" notice.'}
+          </p>
         </div>
         <PublishIssuesPanel issues={publishIssues} subject='bundle' />
         <div aria-live='polite' role='status'>
@@ -832,11 +893,11 @@ function StepSetup({ draft, onChange }: StepProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle id='create-bundle-step-heading'>Step 3 — Setup instructions</CardTitle>
+        <CardTitle id='create-bundle-step-heading'>Step 4 — Setup instructions</CardTitle>
       </CardHeader>
       <CardContent className='space-y-3'>
         <SectionHeader
-          description='Optional post-install notes shown on the bundle page. Markdown supported, with a live preview.'
+          description='Optional post-install steps shown under the README on the bundle page. Keep the general overview in the README. Markdown supported, with a live preview.'
           title='Setup instructions'
         />
         <div className='grid gap-4 lg:grid-cols-2'>

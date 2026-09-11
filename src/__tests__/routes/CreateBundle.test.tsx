@@ -1,7 +1,7 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 
 import { Toast } from '@base-ui-components/react/toast';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,8 @@ import {
   computeBundleVersionConflict,
   CreateBundleRoute,
   createInitialBundleDraft,
+  DRAFT_STORAGE_KEY,
+  loadBundleDraftFromStorage,
   validateBundleDraft,
 } from '@/routes/CreateBundle';
 
@@ -97,6 +99,29 @@ describe('CreateBundle — helpers', () => {
     expect(input.tags).toEqual(['workflow']);
   });
 
+  it('keeps the README out of bundle.json — it is published as a sibling file', () => {
+    const draft: BundleDraftState = {
+      ...createInitialBundleDraft('jason'),
+      assets: [{ name: 'clarification-agent', type: 'agent' }],
+      description: 'd',
+      name: 'my-bundle',
+      readme: '# My bundle\n\nOverview.',
+      setupInstructions: '## Setup',
+    };
+    const input = buildBundleInput(draft);
+    expect(input).not.toHaveProperty('readme');
+    expect(input.setupInstructions).toBe('## Setup');
+  });
+
+  it('loads a persisted draft written before the README step existed', () => {
+    const { readme: _readme, versionConflict: _conflict, ...legacy } = createInitialBundleDraft('jason');
+    window.sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...legacy, name: 'old-draft' }));
+    const loaded = loadBundleDraftFromStorage();
+    expect(loaded).not.toBeNull();
+    expect(loaded?.name).toBe('old-draft');
+    expect(loaded?.readme).toBe('');
+  });
+
   it('validates a well-formed bundle draft and rejects one with no assets', () => {
     const base: BundleDraftState = {
       ...createInitialBundleDraft('jason'),
@@ -123,15 +148,13 @@ describe('CreateBundle — helpers', () => {
 });
 
 describe('CreateBundle — wizard flow', () => {
-  it('walks metadata → assets → review and submits a bundle via publishBundle', async () => {
-    const publishSpy = vi
-      .spyOn(publishServiceModule, 'publishBundle')
-      .mockResolvedValue({
-        branchName: 'bundle/my-bundle/1.0.0',
-        dryRun: false,
-        prUrl: 'https://x/pull/1',
-        warnings: [],
-      });
+  it('walks metadata → assets → README → setup → review and submits a bundle via publishBundle', async () => {
+    const publishSpy = vi.spyOn(publishServiceModule, 'publishBundle').mockResolvedValue({
+      branchName: 'bundle/my-bundle/1.0.0',
+      dryRun: false,
+      prUrl: 'https://x/pull/1',
+      warnings: [],
+    });
 
     renderCreateBundle();
 
@@ -145,17 +168,92 @@ describe('CreateBundle — wizard flow', () => {
     expect(screen.getByTestId('bundle-asset-clarification-agent')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('wizard-next'));
 
-    // Step 3 — setup (optional) → continue
+    // Step 3 — README (optional): type markdown and check the live preview
+    const readme = screen.getByTestId('field-readme');
+    expect(screen.getByTestId('readme-preview')).toHaveTextContent(/preview will appear here/i);
+    fireEvent.change(readme, { target: { value: '# My bundle\n\nWhat it does.' } });
+    expect(
+      within(screen.getByTestId('readme-preview')).getByRole('heading', { level: 1, name: 'My bundle' }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('wizard-next'));
 
-    // Step 4 — review & submit
+    // Step 4 — setup (optional) → continue
+    expect(screen.getByTestId('field-setup')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('wizard-next'));
+
+    // Step 5 — review & submit
     expect(screen.getByTestId('review-valid')).toBeInTheDocument();
+    expect(screen.getByTestId('review-readme')).toHaveTextContent(/readme provided/i);
+    expect(screen.getByTestId('review-bundle')).not.toHaveTextContent('readme');
     fireEvent.click(screen.getByTestId('wizard-submit'));
 
     await waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
     const arg = publishSpy.mock.calls[0]![0];
     expect(arg.bundle.name).toBe('my-bundle');
     expect(arg.bundle.assets).toEqual([{ name: 'clarification-agent', type: 'agent' }]);
+    expect(arg.bundle).not.toHaveProperty('readme');
+    expect(arg.readme).toBe('# My bundle\n\nWhat it does.');
+  });
+
+  it('publishes an empty README and says so on the review step when the README step is skipped', async () => {
+    const publishSpy = vi.spyOn(publishServiceModule, 'publishBundle').mockResolvedValue({
+      branchName: 'bundle/my-bundle/1.0.0',
+      dryRun: false,
+      prUrl: 'https://x/pull/1',
+      warnings: [],
+    });
+
+    renderCreateBundle();
+    fireEvent.change(screen.getByTestId('field-name'), { target: { value: 'my-bundle' } });
+    fireEvent.change(screen.getByTestId('field-description'), { target: { value: 'A useful bundle' } });
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fireEvent.click(screen.getByTestId('add-asset-clarification-agent'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    // README and Setup are both optional.
+    expect(screen.getByTestId('wizard-next')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+
+    expect(screen.getByTestId('review-readme')).toHaveTextContent(/no readme/i);
+    fireEvent.click(screen.getByTestId('wizard-submit'));
+
+    await waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    expect(publishSpy.mock.calls[0]![0].readme).toBe('');
+  });
+
+  it('seeds the README editor from navigation state when editing an existing bundle', () => {
+    const session = makeSessionValue({
+      api: makeTestApiClient(),
+      status: 'member',
+      user: { avatarUrl: null, login: 'test-user', name: null },
+    });
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/bundles/new',
+            state: {
+              assets: [{ name: 'clarification-agent', type: 'agent' }],
+              author: 'jason',
+              description: 'desc',
+              name: 'my-bundle',
+              readme: '# Existing README',
+              version: '1.1.0',
+            },
+          },
+        ]}
+      >
+        <SessionHarness session={session}>
+          <ToastProviderStub>
+            <CreateBundleRoute />
+          </ToastProviderStub>
+        </SessionHarness>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    fireEvent.click(screen.getByTestId('wizard-next'));
+    expect(screen.getByTestId('field-readme')).toHaveValue('# Existing README');
   });
 
   it('blocks proceeding past the assets step until at least one asset is selected', () => {
