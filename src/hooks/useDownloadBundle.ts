@@ -5,8 +5,11 @@ import { downloadBundle, type DownloadBundleOptions } from '@/lib/download-servi
 import { useSession } from './useSession';
 import { useToast } from './useToast';
 
+/** Per-call download options; the API client comes from the session. */
+export type DownloadBundleHookOptions = Omit<DownloadBundleOptions, 'client'>;
+
 export interface UseDownloadBundleResult {
-  download: (name: string, options: DownloadBundleOptions) => Promise<void>;
+  download: (name: string, options: DownloadBundleHookOptions) => Promise<void>;
   isDownloading: (name: string, org?: string) => boolean;
 }
 
@@ -17,7 +20,7 @@ export interface UseDownloadBundleResult {
  */
 export function useDownloadBundle(): UseDownloadBundleResult {
   const toast = useToast();
-  const { token } = useSession();
+  const { api } = useSession();
   const [inFlight, setInFlight] = useState<Set<string>>(() => new Set());
   const inFlightRef = useRef(inFlight);
   inFlightRef.current = inFlight;
@@ -40,12 +43,20 @@ export function useDownloadBundle(): UseDownloadBundleResult {
   }, []);
 
   const download = useCallback(
-    async (name: string, options: DownloadBundleOptions) => {
+    async (name: string, options: DownloadBundleHookOptions) => {
       const key = bundleKey(name, options.org);
       if (inFlightRef.current.has(key)) return;
+      if (!api) {
+        toast.add({
+          description: 'Sign in to download bundles from the registry.',
+          priority: 'high',
+          title: `Failed to download ${name}`,
+        });
+        return;
+      }
       markStart(key);
       try {
-        await downloadBundle(name, { ...(token ? { token } : {}), ...options });
+        await downloadBundle(name, { ...options, client: api });
         toast.add({
           description: `Bundle ${name} downloaded.`,
           priority: 'low',
@@ -61,13 +72,10 @@ export function useDownloadBundle(): UseDownloadBundleResult {
         markDone(key);
       }
     },
-    [markDone, markStart, toast, token],
+    [api, markDone, markStart, toast],
   );
 
-  const isDownloading = useCallback(
-    (name: string, org?: string) => inFlight.has(bundleKey(name, org)),
-    [inFlight],
-  );
+  const isDownloading = useCallback((name: string, org?: string) => inFlight.has(bundleKey(name, org)), [inFlight]);
 
   return { download, isDownloading };
 }

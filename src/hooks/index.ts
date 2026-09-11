@@ -1,3 +1,4 @@
+export { useAssetFiles } from './useAssetFiles';
 export { useAssetManifest } from './useAssetManifest';
 export { useAssetReadme } from './useAssetReadme';
 export { useBundleManifest } from './useBundleManifest';

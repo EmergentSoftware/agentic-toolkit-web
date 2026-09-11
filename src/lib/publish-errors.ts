@@ -1,6 +1,8 @@
 /* eslint-disable perfectionist/sort-modules */
 /** Error classes raised by the contribution publish pipeline. Base class PublishError must precede subclasses. */
 
+import { type ApiErrorDetail, ApiRequestError, NOT_MEMBER_CODES } from './api-client';
+
 /** Base class for publish pipeline errors. Every subclass carries a user-facing `userMessage`. */
 export class PublishError extends Error {
   readonly userMessage: string;
@@ -12,43 +14,38 @@ export class PublishError extends Error {
   }
 }
 
-/** GitHub rate limit exceeded (primary or secondary). */
+/** The ATK API (or GitHub behind it) is rate limiting the caller. */
 export class PublishRateLimitError extends PublishError {
-  readonly retryAfterSeconds?: number;
-
-  constructor(params: { cause?: unknown; retryAfterSeconds?: number }) {
+  constructor(params: { cause?: unknown }) {
     super(
-      'GitHub rate limit exceeded while publishing contribution',
-      params.retryAfterSeconds
-        ? `GitHub is rate-limiting your account. Please try again in about ${Math.ceil(params.retryAfterSeconds / 60)} minute(s).`
-        : 'GitHub is rate-limiting your account. Please wait a few minutes and try again.',
+      'Rate limited while publishing contribution',
+      'The registry is rate-limiting requests right now. Please wait a minute and try again.',
       { cause: params.cause },
     );
     this.name = 'PublishRateLimitError';
-    this.retryAfterSeconds = params.retryAfterSeconds;
   }
 }
 
-/** Caller lacks the permissions required to fork, push, or open a PR. */
+/** Caller is signed out, not an org member, or otherwise not allowed to publish. */
 export class PublishPermissionError extends PublishError {
   constructor(params: { cause?: unknown; detail?: string }) {
     super(
-      `Insufficient GitHub permissions: ${params.detail ?? 'unknown'}`,
-      'Your GitHub account does not have the permissions needed to publish. Sign out and sign back in, making sure to approve access for the EmergentSoftware organization.',
+      `Insufficient permissions to publish: ${params.detail ?? 'unknown'}`,
+      'Your GitHub session does not allow publishing. Sign out and sign back in, making sure you are an active member of the EmergentSoftware organization.',
       { cause: params.cause },
     );
     this.name = 'PublishPermissionError';
   }
 }
 
-/** The contribution branch already exists on the fork (collision with a prior attempt). */
+/** The publish branch already exists on the registry (a prior attempt, or an open PR). */
 export class PublishBranchCollisionError extends PublishError {
   readonly branchName: string;
 
   constructor(params: { branchName: string; cause?: unknown }) {
     super(
-      `Fork branch already exists: ${params.branchName}`,
-      'A branch for this contribution already exists on your fork. A pull request may already be open for this version — please bump the version number or check GitHub for an existing PR.',
+      `Registry branch already exists: ${params.branchName}`,
+      'A branch for this contribution already exists in the registry. A pull request may already be open for this version — please bump the version number or check GitHub for an existing PR.',
       { cause: params.cause },
     );
     this.name = 'PublishBranchCollisionError';
@@ -56,14 +53,46 @@ export class PublishBranchCollisionError extends PublishError {
   }
 }
 
-/** Transport-layer / network failure talking to GitHub. */
+/** The version is not newer than what the registry already has (`version_not_bumped` / `version_exists`). */
+export class PublishVersionConflictError extends PublishError {
+  readonly code: string;
+
+  constructor(params: { cause?: unknown; code: string; detail?: string }) {
+    super(
+      `Version conflict (${params.code}): ${params.detail ?? 'unknown'}`,
+      params.detail ?? 'The registry already has this version. Bump the version number and try again.',
+      { cause: params.cause },
+    );
+    this.name = 'PublishVersionConflictError';
+    this.code = params.code;
+  }
+}
+
+/** The API rejected the payload (`validation_failed` / `schema_invalid`); `details` lists each problem. */
+export class PublishValidationError extends PublishError {
+  readonly code: string;
+  readonly details: ApiErrorDetail[];
+
+  constructor(params: { cause?: unknown; code: string; detail?: string; details?: ApiErrorDetail[] }) {
+    super(
+      `Publish payload rejected (${params.code}): ${params.detail ?? 'unknown'}`,
+      params.detail ?? 'The registry rejected this contribution. Review the issues listed and try again.',
+      { cause: params.cause },
+    );
+    this.name = 'PublishValidationError';
+    this.code = params.code;
+    this.details = params.details ?? [];
+  }
+}
+
+/** Transport-layer failure or a 5xx from the ATK API. */
 export class PublishNetworkError extends PublishError {
   readonly status?: number;
 
   constructor(params: { cause?: unknown; status?: number }) {
     super(
       `Network failure while publishing${params.status !== undefined ? ` (HTTP ${params.status})` : ''}`,
-      'We could not reach GitHub. Check your internet connection and try again.',
+      'We could not reach the registry. Check your internet connection and try again.',
       { cause: params.cause },
     );
     this.name = 'PublishNetworkError';
@@ -72,48 +101,47 @@ export class PublishNetworkError extends PublishError {
 }
 
 /**
- * Translate an arbitrary Octokit/transport error into a typed PublishError.
- * Caller is responsible for wrapping the original error as `cause`.
+ * Translate an {@link ApiRequestError} (or any other failure) from the ATK
+ * API's publish endpoints into a typed {@link PublishError}.
  */
-export function mapOctokitError(error: unknown): PublishError {
+export function mapApiError(error: unknown, context: { branchName?: string } = {}): PublishError {
   if (error instanceof PublishError) return error;
 
-  const status = (error as { status?: number }).status;
-  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof ApiRequestError)) {
+    return new PublishNetworkError({ cause: error });
+  }
 
-  if (status === 401 || status === 403) {
-    // Rate limit is signalled via 403 with x-ratelimit-remaining: 0 on GitHub,
-    // or explicit "rate limit" text. Treat those as rate limit; otherwise permission.
-    const isRateLimit =
-      /rate limit/i.test(message) ||
-      (error as { response?: { headers?: Record<string, string> } }).response?.headers?.[
-        'x-ratelimit-remaining'
-      ] === '0';
-    if (isRateLimit) {
-      const retryAfterHeader = (error as { response?: { headers?: Record<string, string> } }).response
-        ?.headers?.['retry-after'];
-      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
-      return new PublishRateLimitError({
-        cause: error,
-        ...(Number.isFinite(retryAfterSeconds) && retryAfterSeconds ? { retryAfterSeconds } : {}),
-      });
-    }
+  const { code, details, message, status } = error;
+
+  if (status === 0) {
+    return new PublishNetworkError({ cause: error });
+  }
+
+  if (status === 401 || (status === 403 && NOT_MEMBER_CODES.has(code))) {
     return new PublishPermissionError({ cause: error, detail: message });
   }
 
   if (status === 429) {
-    const retryAfterHeader = (error as { response?: { headers?: Record<string, string> } }).response
-      ?.headers?.['retry-after'];
-    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
-    return new PublishRateLimitError({
-      cause: error,
-      ...(Number.isFinite(retryAfterSeconds) && retryAfterSeconds ? { retryAfterSeconds } : {}),
-    });
+    return new PublishRateLimitError({ cause: error });
   }
 
-  if (status === 422 && /reference already exists|already exists/i.test(message)) {
-    return new PublishBranchCollisionError({ branchName: 'unknown', cause: error });
+  if (status === 409 && code === 'branch_exists') {
+    return new PublishBranchCollisionError({ branchName: context.branchName ?? 'unknown', cause: error });
   }
 
-  return new PublishNetworkError({ cause: error, ...(status !== undefined ? { status } : {}) });
+  if (status === 409 && (code === 'version_not_bumped' || code === 'version_exists')) {
+    return new PublishVersionConflictError({ cause: error, code, detail: message });
+  }
+
+  if (status === 400 && (code === 'validation_failed' || code === 'schema_invalid')) {
+    return new PublishValidationError({ cause: error, code, detail: message, details });
+  }
+
+  if (status >= 500) {
+    return new PublishNetworkError({ cause: error, status });
+  }
+
+  // 400 (invalid_reviewer, reviewers_not_allowed, ...), other 403s, and anything
+  // else: the API message is the best text we have.
+  return new PublishError(`Publish rejected (${code}): ${message}`, message, { cause: error });
 }

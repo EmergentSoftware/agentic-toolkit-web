@@ -5,8 +5,11 @@ import { type AssetRef, downloadAsset, type DownloadAssetOptions } from '@/lib/d
 import { useSession } from './useSession';
 import { useToast } from './useToast';
 
+/** Per-call download options; the API client comes from the session. */
+export type DownloadAssetHookOptions = Omit<DownloadAssetOptions, 'client'>;
+
 export interface UseDownloadAssetResult {
-  download: (ref: AssetRef, options?: DownloadAssetOptions) => Promise<void>;
+  download: (ref: AssetRef, options?: DownloadAssetHookOptions) => Promise<void>;
   isDownloading: (ref: AssetRef) => boolean;
 }
 
@@ -17,7 +20,7 @@ export interface UseDownloadAssetResult {
  */
 export function useDownloadAsset(): UseDownloadAssetResult {
   const toast = useToast();
-  const { token } = useSession();
+  const { api } = useSession();
   const [inFlight, setInFlight] = useState<Set<string>>(() => new Set());
   const inFlightRef = useRef(inFlight);
   inFlightRef.current = inFlight;
@@ -40,12 +43,20 @@ export function useDownloadAsset(): UseDownloadAssetResult {
   }, []);
 
   const download = useCallback(
-    async (ref: AssetRef, options?: DownloadAssetOptions) => {
+    async (ref: AssetRef, options?: DownloadAssetHookOptions) => {
       const key = refKey(ref);
       if (inFlightRef.current.has(key)) return;
+      if (!api) {
+        toast.add({
+          description: 'Sign in to download assets from the registry.',
+          priority: 'high',
+          title: `Failed to download ${ref.name}`,
+        });
+        return;
+      }
       markStart(key);
       try {
-        await downloadAsset(ref, { ...(token ? { token } : {}), ...options });
+        await downloadAsset(ref, { ...options, client: api });
         toast.add({
           description: `${ref.name}@${ref.version} downloaded.`,
           priority: 'low',
@@ -61,7 +72,7 @@ export function useDownloadAsset(): UseDownloadAssetResult {
         markDone(key);
       }
     },
-    [markDone, markStart, toast, token],
+    [api, markDone, markStart, toast],
   );
 
   const isDownloading = useCallback((ref: AssetRef) => inFlight.has(refKey(ref)), [inFlight]);

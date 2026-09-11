@@ -1,4 +1,3 @@
-import type { Octokit } from '@octokit/rest';
 import type { ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -14,8 +13,8 @@ interface SessionHarnessProps {
 /** Default no-op session. Override fields as needed per test. */
 export function makeSessionValue(overrides: Partial<SessionContextValue> = {}): SessionContextValue {
   return {
+    api: null,
     completeSignIn: () => {},
-    octokit: null,
     signIn: () => {},
     signOut: () => {},
     status: 'signed-out',
@@ -41,11 +40,4 @@ export function SessionHarness({ children, client, session }: SessionHarnessProp
       <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
     </QueryClientProvider>
   );
-}
-
-/** Minimal Octokit stub whose only method is `rest.repos.getContent`. */
-export function stubOctokit(
-  getContent: (params: unknown) => Promise<unknown>,
-): Octokit {
-  return { rest: { repos: { getContent } } } as unknown as Octokit;
 }

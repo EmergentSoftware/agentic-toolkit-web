@@ -14,12 +14,12 @@ import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useAssetFiles } from '@/hooks/useAssetFiles';
 import { useAssetManifest } from '@/hooks/useAssetManifest';
 import { useAssetReadme } from '@/hooks/useAssetReadme';
 import { useDownloadAsset } from '@/hooks/useDownloadAsset';
 import { useManifestGraph } from '@/hooks/useManifestGraph';
 import { useRegistry } from '@/hooks/useRegistry';
-import { listAssetFiles } from '@/lib/file-list';
 import { type AssetManifestRef } from '@/lib/registry-client';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { cn } from '@/lib/utils';
@@ -44,13 +44,11 @@ export function AssetDetailRoute() {
 
   const manifestQuery = useAssetManifest(ref);
   const readmeQuery = useAssetReadme(ref);
+  const filesQuery = useAssetFiles(ref);
   const registryQuery = useRegistry();
   const { download, isDownloading } = useDownloadAsset();
 
-  const depRefs = useMemo(
-    () => collectDirectDepRefs(manifestQuery.data),
-    [manifestQuery.data],
-  );
+  const depRefs = useMemo(() => collectDirectDepRefs(manifestQuery.data), [manifestQuery.data]);
   const depGraph = useManifestGraph(depRefs);
 
   const registryAsset = findRegistryAsset(registryQuery.data?.assets, assetType, name, org);
@@ -163,7 +161,11 @@ export function AssetDetailRoute() {
           <MetadataRow label='Author'>{manifest.author}</MetadataRow>
           <MetadataRow label='Description'>{manifest.description}</MetadataRow>
           <MetadataRow label='Org scope'>
-            {manifest.org ? <Badge variant='secondary'>{manifest.org}</Badge> : <span className='text-muted-foreground'>global</span>}
+            {manifest.org ? (
+              <Badge variant='secondary'>{manifest.org}</Badge>
+            ) : (
+              <span className='text-muted-foreground'>global</span>
+            )}
           </MetadataRow>
 
           {manifest.tags && manifest.tags.length > 0 ? (
@@ -216,19 +218,21 @@ export function AssetDetailRoute() {
       </Card>
 
       <FilesCard
-        error={depGraph.error}
-        groups={buildAssetFileGroups(manifest, depGraph.manifests, depGraph.order)}
-        isLoading={depGraph.isLoading}
+        error={filesQuery.error ?? depGraph.error}
+        groups={buildAssetFileGroups(
+          manifest,
+          filesQuery.data?.files.map((file) => file.path) ?? [],
+          depGraph.manifests,
+          depGraph.files,
+          depGraph.order,
+        )}
+        isLoading={filesQuery.isLoading || depGraph.isLoading}
         testId='asset-detail-files'
       />
 
       <section aria-label='Asset README' data-testid='asset-detail-readme'>
         <h2 className='mb-3 text-lg font-semibold tracking-tight text-foreground'>README</h2>
-        <ReadmeView
-          isError={readmeQuery.isError}
-          isLoading={readmeQuery.isLoading}
-          readme={readmeQuery.data ?? null}
-        />
+        <ReadmeView isError={readmeQuery.isError} isLoading={readmeQuery.isLoading} readme={readmeQuery.data ?? null} />
       </section>
     </div>
   );
@@ -260,12 +264,14 @@ function BackToBrowseLink() {
 
 function buildAssetFileGroups(
   manifest: Manifest,
+  primaryFiles: string[],
   depManifests: Map<string, Manifest>,
+  depFiles: Map<string, string[]>,
   order: string[],
 ): FileGroup[] {
   const groups: FileGroup[] = [
     {
-      files: listAssetFiles(manifest),
+      files: primaryFiles,
       name: manifest.name,
       testId: `files-group-${manifest.name}`,
     },
@@ -274,7 +280,7 @@ function buildAssetFileGroups(
     const dep = depManifests.get(key);
     if (!dep) continue;
     groups.push({
-      files: listAssetFiles(dep),
+      files: depFiles.get(key) ?? [],
       name: dep.name,
       testId: `files-group-${dep.name}-${dep.version}`,
       version: dep.version,
@@ -312,15 +318,7 @@ function MetadataRow({ children, label }: { children: React.ReactNode; label: st
   );
 }
 
-function ReadmeView({
-  isError,
-  isLoading,
-  readme,
-}: {
-  isError: boolean;
-  isLoading: boolean;
-  readme: null | string;
-}) {
+function ReadmeView({ isError, isLoading, readme }: { isError: boolean; isLoading: boolean; readme: null | string }) {
   if (isLoading) {
     return <LoadingIndicator label='Loading README…' variant='skeleton' />;
   }

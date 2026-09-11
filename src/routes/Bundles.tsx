@@ -10,11 +10,11 @@ import {
 } from '@tanstack/react-table';
 import { Building2, Columns3, Hash, X } from 'lucide-react';
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import type { DownloadFormat } from '@/lib/download-service';
-import type { RegistryAsset, RegistryBundle } from '@/lib/schemas/registry';
+import type { RegistryBundle } from '@/lib/schemas/registry';
 
 import { DownloadMenu } from '@/components/DownloadMenu';
 import { EmptyState } from '@/components/EmptyState';
@@ -46,16 +46,7 @@ interface BundleRow {
   version: string;
 }
 
-const ALL_COLUMN_IDS = [
-  'name',
-  'version',
-  'author',
-  'description',
-  'tags',
-  'org',
-  'assetCount',
-  'actions',
-] as const;
+const ALL_COLUMN_IDS = ['name', 'version', 'author', 'description', 'tags', 'org', 'assetCount', 'actions'] as const;
 type ColumnId = (typeof ALL_COLUMN_IDS)[number];
 
 const COLUMN_VISIBILITY_STORAGE_KEY = 'atk.bundles.columnVisibility';
@@ -97,10 +88,7 @@ export function BundlesRoute() {
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(loadColumnVisibility);
   useEffect(() => {
     try {
-      window.localStorage.setItem(
-        COLUMN_VISIBILITY_STORAGE_KEY,
-        JSON.stringify(columnVisibility),
-      );
+      window.localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
     } catch {
       /* ignore persistence errors */
     }
@@ -116,20 +104,6 @@ export function BundlesRoute() {
   }, [showOrgScoped]);
 
   const bundles = useMemo<RegistryBundle[]>(() => data?.bundles ?? [], [data]);
-  const assets = useMemo<RegistryAsset[]>(() => data?.assets ?? [], [data]);
-
-  const resolveVersion = useCallback(
-    (member: { name: string; org?: string; type: string }) => {
-      const match = assets.find(
-        (asset) =>
-          asset.name === member.name &&
-          asset.type === member.type &&
-          (asset.org ?? undefined) === member.org,
-      );
-      return match?.latest;
-    },
-    [assets],
-  );
 
   const { allOrgs, allTags } = useMemo(() => {
     const tags = new Set<string>();
@@ -238,7 +212,6 @@ export function BundlesRoute() {
                 void download(row.original.name, {
                   format,
                   org: bundleOrg,
-                  resolveVersion,
                   version: row.original.version,
                 })
               }
@@ -252,7 +225,7 @@ export function BundlesRoute() {
         id: 'actions',
       },
     ],
-    [download, isDownloading, resolveVersion],
+    [download, isDownloading],
   );
 
   const table = useReactTable({
@@ -303,12 +276,7 @@ export function BundlesRoute() {
     <>
       <PageHeader
         actions={
-          <Button
-            data-testid='create-bundle-link'
-            onClick={() => navigate('/bundles/new')}
-            size='sm'
-            type='button'
-          >
+          <Button data-testid='create-bundle-link' onClick={() => navigate('/bundles/new')} size='sm' type='button'>
             Create bundle
           </Button>
         }
@@ -361,13 +329,7 @@ export function BundlesRoute() {
             <span>Show org-scoped bundles</span>
           </label>
           {hasActiveFilters ? (
-            <Button
-              className='ml-auto'
-              data-testid='clear-all-filters'
-              onClick={clearAll}
-              size='sm'
-              variant='ghost'
-            >
+            <Button className='ml-auto' data-testid='clear-all-filters' onClick={clearAll} size='sm' variant='ghost'>
               Clear all filters
             </Button>
           ) : null}
@@ -420,7 +382,6 @@ export function BundlesRoute() {
               void download(row.name, {
                 format,
                 org: row.org || undefined,
-                resolveVersion,
                 version: row.version,
               })
             }

@@ -7,6 +7,7 @@ import { useWideLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
+import { PublishIssuesPanel } from '@/components/PublishIssuesPanel';
 import { SectionHeader } from '@/components/SectionHeader';
 import { Stepper, type StepperStep } from '@/components/Stepper';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
@@ -19,7 +20,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useRegistry } from '@/hooks/useRegistry';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
-import { PublishError } from '@/lib/publish-errors';
+import { type ApiErrorDetail } from '@/lib/api-client';
+import { PublishError, PublishValidationError } from '@/lib/publish-errors';
 import { publishBundle, type PublishProgressEvent } from '@/lib/publish-service';
 import { findExistingBundle } from '@/lib/registry-client';
 import { type Bundle, BundleSchema } from '@/lib/schemas/bundle';
@@ -42,6 +44,8 @@ export interface BundleDraftState {
   author: string;
   description: string;
   name: string;
+  /** Bare org name (no `@`) for an org-scoped bundle; empty for a global bundle. */
+  org: string;
   setupInstructions: string;
   step: number;
   tags: string[];
@@ -55,6 +59,7 @@ export interface CreateBundleSeed {
   author: string;
   description: string;
   name: string;
+  org?: string;
   setupInstructions?: string;
   tags?: string[];
   version: string;
@@ -73,6 +78,7 @@ const STEPS: StepperStep[] = [
 ];
 
 const KEBAB_CASE_REGEX = /^[a-z][a-z0-9-]*(?<!-)$/;
+const ORG_REGEX = /^[a-zA-Z][a-zA-Z0-9-]*$/;
 const MAX_ASSET_RESULTS = 25;
 
 export function createInitialBundleDraft(author = ''): BundleDraftState {
@@ -81,6 +87,7 @@ export function createInitialBundleDraft(author = ''): BundleDraftState {
     author,
     description: '',
     name: '',
+    org: '',
     setupInstructions: '',
     step: 0,
     tags: [],
@@ -102,8 +109,13 @@ const PersistedDraftSchema = z.object({
   author: z.string(),
   description: z.string(),
   name: z.string(),
+  org: z.string().optional().default(''),
   setupInstructions: z.string(),
-  step: z.number().int().min(0).max(STEPS.length - 1),
+  step: z
+    .number()
+    .int()
+    .min(0)
+    .max(STEPS.length - 1),
   tags: z.array(z.string()),
   version: z.string(),
 });
@@ -130,6 +142,7 @@ export function buildBundleInput(draft: BundleDraftState): Record<string, unknow
     name: draft.name,
     version: draft.version,
   };
+  if (draft.org) bundle.org = draft.org;
   if (draft.tags.length > 0) bundle.tags = draft.tags;
   if (draft.setupInstructions.trim().length > 0) bundle.setupInstructions = draft.setupInstructions;
   return bundle;
@@ -139,13 +152,10 @@ export function clearBundleDraftFromStorage(): void {
   window.sessionStorage.removeItem(DRAFT_STORAGE_KEY);
 }
 
-export function computeBundleVersionConflict(
-  draft: BundleDraftState,
-  registry: null | Registry,
-): VersionConflictState {
+export function computeBundleVersionConflict(draft: BundleDraftState, registry: null | Registry): VersionConflictState {
   if (!registry) return { status: 'none' };
   if (!draft.name || !isValidSemver(draft.version)) return { status: 'none' };
-  const found = findExistingBundle(registry, { name: draft.name });
+  const found = findExistingBundle(registry, { name: draft.name, org: draft.org || undefined });
   if (!found) return { status: 'none' };
   const cmp = semverCompare(draft.version, found.latest);
   return cmp > 0
@@ -155,7 +165,7 @@ export function computeBundleVersionConflict(
 
 export function CreateBundleRoute() {
   useWideLayout();
-  const { octokit, user } = useSession();
+  const { api, user } = useSession();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -168,6 +178,7 @@ export function CreateBundleRoute() {
   const [draft, setDraft] = useState<BundleDraftState>(() => createInitialBundleDraft(defaultAuthor));
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
+  const [publishIssues, setPublishIssues] = useState<ApiErrorDetail[]>([]);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const hydratedRef = useRef(false);
   const skipNextPersistRef = useRef(false);
@@ -190,6 +201,7 @@ export function CreateBundleRoute() {
         author: seed.author || defaultAuthor,
         description: seed.description,
         name: seed.name,
+        org: seed.org ?? '',
         setupInstructions: seed.setupInstructions ?? '',
         tags: seed.tags ?? [],
         version: seed.version,
@@ -222,7 +234,7 @@ export function CreateBundleRoute() {
       }
       return { ...prev, versionConflict: next };
     });
-  }, [registry, draft.name, draft.version]);
+  }, [registry, draft.name, draft.org, draft.version]);
 
   const update = <K extends keyof BundleDraftState>(key: K, value: BundleDraftState[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -253,7 +265,7 @@ export function CreateBundleRoute() {
     const result = validateBundleDraft(draft);
     if (!result.success) return;
     if (submitting) return;
-    if (!octokit || !user) {
+    if (!api || !user) {
       toast.add({
         description: 'You need to be signed in to publish a bundle.',
         priority: 'high',
@@ -263,13 +275,14 @@ export function CreateBundleRoute() {
     }
 
     setSubmitting(true);
-    setProgress({ message: 'Preparing your workspace', step: 'preparing-workspace' });
+    setPublishIssues([]);
+    setProgress({ message: 'Preparing your contribution', step: 'preparing-workspace' });
 
     try {
       const publishResult = await publishBundle({
         bundle: result.data,
+        client: api,
         dryRun,
-        octokit,
         onProgress: (event) => setProgress(event),
         readme: '',
       });
@@ -282,9 +295,11 @@ export function CreateBundleRoute() {
           branchName: publishResult.branchName,
           dryRun: publishResult.dryRun,
           prUrl: publishResult.prUrl,
+          warnings: publishResult.warnings,
         },
       });
     } catch (error) {
+      if (error instanceof PublishValidationError) setPublishIssues(error.details);
       const message =
         error instanceof PublishError
           ? error.userMessage
@@ -314,15 +329,10 @@ export function CreateBundleRoute() {
       <section aria-labelledby='create-bundle-step-heading' className='space-y-6'>
         {draft.step === 0 && <StepMetadata draft={draft} onChange={update} />}
         {draft.step === 1 && (
-          <StepAssets
-            draft={draft}
-            isLoading={registryQuery.isLoading}
-            onChange={update}
-            registry={registry}
-          />
+          <StepAssets draft={draft} isLoading={registryQuery.isLoading} onChange={update} registry={registry} />
         )}
         {draft.step === 2 && <StepSetup draft={draft} onChange={update} />}
-        {draft.step === 3 && <StepReview draft={draft} validation={validation} />}
+        {draft.step === 3 && <StepReview draft={draft} publishIssues={publishIssues} validation={validation} />}
         {submitting && progress ? (
           <div
             aria-live='polite'
@@ -401,6 +411,7 @@ function getStepValidity(draft: BundleDraftState): { canProceedFrom: boolean[]; 
   const s0 =
     KEBAB_CASE_REGEX.test(draft.name) &&
     draft.description.trim().length > 0 &&
+    (!draft.org || ORG_REGEX.test(draft.org)) &&
     isValidSemver(draft.version) &&
     draft.author.trim().length > 0 &&
     draft.versionConflict.status !== 'conflict';
@@ -447,7 +458,10 @@ function StepAssets({
   };
 
   const removeAsset = (key: string) => {
-    onChange('assets', draft.assets.filter((a) => assetKey(a) !== key));
+    onChange(
+      'assets',
+      draft.assets.filter((a) => assetKey(a) !== key),
+    );
   };
 
   const setMemberVersion = (key: string, version: string | undefined) => {
@@ -586,6 +600,7 @@ function StepAssets({
 function StepMetadata({ draft, onChange }: StepProps) {
   const [tagDraft, setTagDraft] = useState('');
   const nameValid = !draft.name || KEBAB_CASE_REGEX.test(draft.name);
+  const orgValid = !draft.org || ORG_REGEX.test(draft.org);
   const versionValid = draft.version === '' || isValidSemver(draft.version);
 
   const addTag = () => {
@@ -598,7 +613,11 @@ function StepMetadata({ draft, onChange }: StepProps) {
     onChange('tags', [...draft.tags, cleaned]);
     setTagDraft('');
   };
-  const removeTag = (tag: string) => onChange('tags', draft.tags.filter((t) => t !== tag));
+  const removeTag = (tag: string) =>
+    onChange(
+      'tags',
+      draft.tags.filter((t) => t !== tag),
+    );
 
   return (
     <Card>
@@ -667,16 +686,42 @@ function StepMetadata({ draft, onChange }: StepProps) {
             value={draft.description}
           />
         </div>
-        <div className='space-y-1.5'>
-          <Label htmlFor='bundle-author'>Author</Label>
-          <Input
-            data-testid='field-author'
-            id='bundle-author'
-            onChange={(event) => onChange('author', event.target.value)}
-            placeholder='GitHub login'
-            value={draft.author}
-          />
-          <p className='text-xs text-muted-foreground'>Pre-filled from your GitHub session; edit if needed.</p>
+        <div className='grid gap-4 sm:grid-cols-2'>
+          <div className='space-y-1.5'>
+            <Label htmlFor='bundle-org'>Org (optional)</Label>
+            <Input
+              aria-describedby='bundle-org-error'
+              aria-invalid={!orgValid}
+              data-testid='field-org'
+              id='bundle-org'
+              onChange={(event) => onChange('org', event.target.value)}
+              placeholder='my-org'
+              value={draft.org}
+            />
+            <div aria-live='polite' id='bundle-org-error' role='status'>
+              {!orgValid ? (
+                <p className='text-xs text-destructive' data-testid='error-org'>
+                  Org must start with a letter and contain only letters, digits, and hyphens.
+                </p>
+              ) : (
+                <p className='text-xs text-muted-foreground'>
+                  Leave blank for a global bundle. An org bundle may only include its own org&apos;s assets and global
+                  assets.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor='bundle-author'>Author</Label>
+            <Input
+              data-testid='field-author'
+              id='bundle-author'
+              onChange={(event) => onChange('author', event.target.value)}
+              placeholder='GitHub login'
+              value={draft.author}
+            />
+            <p className='text-xs text-muted-foreground'>Pre-filled from your GitHub session; edit if needed.</p>
+          </div>
         </div>
         <div className='space-y-1.5'>
           <Label htmlFor='bundle-tag-input'>Tags</Label>
@@ -724,9 +769,12 @@ function StepMetadata({ draft, onChange }: StepProps) {
 
 function StepReview({
   draft,
+  publishIssues,
   validation,
 }: {
   draft: BundleDraftState;
+  /** Problems reported by the registry API on the last submit attempt. */
+  publishIssues: ApiErrorDetail[];
   validation: z.ZodSafeParseResult<Bundle>;
 }) {
   const bundleInput = buildBundleInput(draft);
@@ -756,6 +804,7 @@ function StepReview({
             {JSON.stringify(bundleInput, null, 2)}
           </pre>
         </div>
+        <PublishIssuesPanel issues={publishIssues} subject='bundle' />
         <div aria-live='polite' role='status'>
           {validation.success ? (
             <p className='text-sm text-foreground' data-testid='review-valid'>
@@ -909,7 +958,13 @@ function WizardNav({
 }) {
   return (
     <div className='flex items-center justify-between gap-2 pt-2'>
-      <Button data-testid='wizard-back' disabled={step === 0 || submitting} onClick={onBack} type='button' variant='outline'>
+      <Button
+        data-testid='wizard-back'
+        disabled={step === 0 || submitting}
+        onClick={onBack}
+        type='button'
+        variant='outline'
+      >
         Back
       </Button>
       <div className='flex items-center gap-2'>

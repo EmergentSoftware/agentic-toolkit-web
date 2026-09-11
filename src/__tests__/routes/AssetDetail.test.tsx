@@ -6,21 +6,30 @@ import { type ReactNode } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AssetFileList } from '@/lib/registry-client';
 import type { Manifest, Registry } from '@/lib/schemas';
 
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { AssetDetailRoute } from '@/routes/AssetDetail';
 
+const useAssetFilesMock = vi.hoisted(() => vi.fn());
 const useAssetManifestMock = vi.hoisted(() => vi.fn());
 const useAssetReadmeMock = vi.hoisted(() => vi.fn());
 const useDownloadAssetMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
 );
 const useManifestGraphMock = vi.hoisted(() =>
-  vi.fn(() => ({ error: null, isLoading: false, manifests: new Map(), order: [] })),
+  vi.fn(() => ({
+    error: null as Error | null,
+    files: new Map<string, string[]>(),
+    isLoading: false,
+    manifests: new Map<string, Manifest>(),
+    order: [] as string[],
+  })),
 );
 const useRegistryMock = vi.hoisted(() => vi.fn());
 
+vi.mock('@/hooks/useAssetFiles', () => ({ useAssetFiles: useAssetFilesMock }));
 vi.mock('@/hooks/useAssetManifest', () => ({ useAssetManifest: useAssetManifestMock }));
 vi.mock('@/hooks/useAssetReadme', () => ({ useAssetReadme: useAssetReadmeMock }));
 vi.mock('@/hooks/useDownloadAsset', () => ({ useDownloadAsset: useDownloadAssetMock }));
@@ -31,11 +40,18 @@ vi.mock('@/hooks/useManifestGraph', () => ({
 }));
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 
+type FilesQueryShape = Partial<UseQueryResult<AssetFileList, Error>>;
 type ManifestQueryShape = Partial<UseQueryResult<Manifest, Error>>;
 type ReadmeQueryShape = Partial<UseQueryResult<null | string, Error>>;
 type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;
 
-function buildRegistryWith(asset: { latest: string; name: string; org?: string; type: Manifest['type']; versions: string[] }): Registry {
+function buildRegistryWith(asset: {
+  latest: string;
+  name: string;
+  org?: string;
+  type: Manifest['type'];
+  versions: string[];
+}): Registry {
   const versions: Registry['assets'][number]['versions'] = {};
   for (const v of asset.versions) {
     versions[v] = {
@@ -62,9 +78,7 @@ function buildRegistryWith(asset: { latest: string; name: string; org?: string; 
 
 function LocationProbe() {
   const loc = useLocation();
-  return (
-    <div data-pathname={loc.pathname} data-search={loc.search} data-testid='location-probe' />
-  );
+  return <div data-pathname={loc.pathname} data-search={loc.search} data-testid='location-probe' />;
 }
 
 function renderAt(path: string) {
@@ -83,6 +97,17 @@ function renderAt(path: string) {
     );
   }
   return render(<AssetDetailRoute />, { wrapper: Wrapper });
+}
+
+function setFiles(state: FilesQueryShape) {
+  useAssetFilesMock.mockReturnValue({
+    data: undefined,
+    error: null,
+    isError: false,
+    isLoading: false,
+    isSuccess: false,
+    ...state,
+  });
 }
 
 function setManifest(state: ManifestQueryShape) {
@@ -172,12 +197,77 @@ See [docs](https://example.com).
 describe('AssetDetailRoute', () => {
   beforeEach(() => {
     setRegistry({ data: undefined });
+    setFiles({ data: undefined });
   });
 
   afterEach(() => {
+    useAssetFilesMock.mockReset();
     useAssetManifestMock.mockReset();
     useAssetReadmeMock.mockReset();
     useRegistryMock.mockReset();
+  });
+
+  it('lists the files from the API directory listing, with dependency files from the graph', () => {
+    setManifest({ data: FULL_MANIFEST, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
+    setFiles({
+      data: {
+        files: [
+          { path: 'AGENT.md', sha: 'a', size: 1 },
+          { path: 'README.md', sha: 'b', size: 1 },
+          { path: 'manifest.json', sha: 'c', size: 1 },
+          { path: 'reference/checks.md', sha: 'd', size: 1 },
+        ],
+        name: 'validate',
+        org: 'agentic-toolkit',
+        type: 'agent',
+        version: '1.1.0',
+      },
+      isSuccess: true,
+    });
+    const depKey = 'rule::dev-commands-rule:^1.0.0';
+    useManifestGraphMock.mockReturnValueOnce({
+      error: null,
+      files: new Map([[depKey, ['RULE.md', 'manifest.json']]]),
+      isLoading: false,
+      manifests: new Map([
+        [
+          depKey,
+          {
+            author: 'x',
+            description: 'dep',
+            entrypoint: 'RULE.md',
+            name: 'dev-commands-rule',
+            type: 'rule',
+            version: '^1.0.0',
+          } as Manifest,
+        ],
+      ]),
+      order: [depKey],
+    });
+
+    renderAt('/assets/agent/validate/1.1.0?org=agentic-toolkit');
+
+    expect(useAssetFilesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' }),
+    );
+    const primary = screen.getByTestId('files-group-validate');
+    expect(within(primary).getByText('AGENT.md')).toBeInTheDocument();
+    expect(within(primary).getByText('reference/checks.md')).toBeInTheDocument();
+    expect(within(primary).getByText('manifest.json')).toBeInTheDocument();
+
+    const dep = screen.getByTestId('files-group-dev-commands-rule-^1.0.0');
+    expect(within(dep).getByText('RULE.md')).toBeInTheDocument();
+  });
+
+  it('shows the files loading state while the listing is inflight', () => {
+    setManifest({ data: MINIMAL_MANIFEST, isSuccess: true });
+    setReadme({ data: null, isSuccess: true });
+    setFiles({ isLoading: true });
+
+    renderAt('/assets/skill/bare-skill/0.1.0');
+
+    expect(screen.getByTestId('files-card-loading')).toBeInTheDocument();
   });
 
   it('renders every field of a fully populated manifest', () => {
@@ -343,10 +433,9 @@ describe('AssetDetailRoute', () => {
       expect(screen.getByTestId('asset-detail-version-selector')).toHaveTextContent('v1.0.0');
 
       fireEvent.click(screen.getByRole('button', { name: /download validate/i }));
-      expect(download).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'validate', version: '1.0.0' }),
-        { format: 'zip' },
-      );
+      expect(download).toHaveBeenCalledWith(expect.objectContaining({ name: 'validate', version: '1.0.0' }), {
+        format: 'zip',
+      });
     });
   });
 });

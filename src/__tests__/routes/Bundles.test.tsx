@@ -61,10 +61,7 @@ function renderBundles() {
           <MemoryRouter initialEntries={['/bundles']}>
             <Routes>
               <Route element={children} path='/bundles' />
-              <Route
-                element={<div data-testid='bundle-detail-route'>BUNDLE DETAIL</div>}
-                path='/bundles/:bundleId'
-              />
+              <Route element={<div data-testid='bundle-detail-route'>BUNDLE DETAIL</div>} path='/bundles/:bundleId' />
               <Route
                 element={<div data-testid='bundle-detail-org-route'>ORG BUNDLE DETAIL</div>}
                 path='/bundles/:org/:name'
@@ -202,9 +199,7 @@ describe('BundlesRoute', () => {
     mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
     renderBundles();
 
-    expect(screen.getAllByTestId('bundle-scoped-hint-feature-workflow')[0]).toHaveTextContent(
-      /\+1 org/i,
-    );
+    expect(screen.getAllByTestId('bundle-scoped-hint-feature-workflow')[0]).toHaveTextContent(/\+1 org/i);
   });
 
   it('passes the bundle org to the download hook for an org-scoped bundle (W3)', () => {
@@ -219,13 +214,10 @@ describe('BundlesRoute', () => {
     fireEvent.click(screen.getAllByTestId(`bundles-download-${name}`)[0]!);
     fireEvent.click(screen.getAllByTestId(`bundles-download-${name}-zip`)[0]!);
 
-    expect(download).toHaveBeenCalledWith(
-      name,
-      expect.objectContaining({ format: 'zip', org: 'cupay' }),
-    );
+    expect(download).toHaveBeenCalledWith(name, expect.objectContaining({ format: 'zip', org: 'cupay' }));
   });
 
-  it('invokes the download hook (with resolveVersion and format) when a row download option is chosen', () => {
+  it('invokes the download hook with the chosen format when a row download option is chosen', () => {
     const download = vi.fn().mockResolvedValue(undefined);
     useDownloadBundleMock.mockReturnValueOnce({ download, isDownloading: () => false });
     mockUseRegistry({ data: loadFixtureRegistry(), isSuccess: true });
@@ -236,7 +228,7 @@ describe('BundlesRoute', () => {
 
     expect(download).toHaveBeenCalledWith(
       'feature-workflow',
-      expect.objectContaining({ format: 'zip', resolveVersion: expect.any(Function) }),
+      expect.objectContaining({ format: 'zip', version: '1.0.0' }),
     );
   });
 
@@ -251,7 +243,7 @@ describe('BundlesRoute', () => {
 
     expect(download).toHaveBeenCalledWith(
       'feature-workflow',
-      expect.objectContaining({ format: 'skill', resolveVersion: expect.any(Function) }),
+      expect.objectContaining({ format: 'skill', version: '1.0.0' }),
     );
   });
 
@@ -340,11 +332,7 @@ describe('BundlesRoute', () => {
     renderBundles();
 
     const tableWrapper = screen.getByTestId('bundles-table-wrapper');
-    expect(
-      within(tableWrapper).queryByRole('columnheader', { name: /^author$/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(tableWrapper).queryByRole('columnheader', { name: /^tags$/i }),
-    ).not.toBeInTheDocument();
+    expect(within(tableWrapper).queryByRole('columnheader', { name: /^author$/i })).not.toBeInTheDocument();
+    expect(within(tableWrapper).queryByRole('columnheader', { name: /^tags$/i })).not.toBeInTheDocument();
   });
 });

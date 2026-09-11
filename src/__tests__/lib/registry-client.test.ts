@@ -1,8 +1,7 @@
-import type { Octokit } from '@octokit/rest';
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  fetchAssetFiles,
   fetchAssetManifest,
   fetchAssetReadme,
   fetchBundleManifest,
@@ -13,136 +12,90 @@ import {
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from '@/lib/registry-errors';
 
 import { loadFixtureRegistry } from '../fixtures';
+import {
+  API_BASE,
+  apiErrorResponse,
+  jsonResponse,
+  makeTestApiClient,
+  stubFetch,
+  textResponse,
+} from '../utils/api-stub';
 
-const fastRetry = { baseDelayMs: 1, jitter: false, maxDelayMs: 5, maxRetries: 1 } as const;
+const client = makeTestApiClient('tok');
 
-type GetContentResult = Awaited<ReturnType<Octokit['rest']['repos']['getContent']>>;
-
-function httpError(status: number, message = `HTTP ${status}`): Error & { status: number } {
-  const err = new Error(message) as Error & { status: number };
-  err.status = status;
-  return err;
-}
-
-/**
- * Build a minimal fake Octokit whose `rest.repos.getContent` resolves from the
- * given queue. The queue is consumed FIFO; a value can be a raw string, an
- * Error to throw, or a ready-made response envelope.
- */
-function makeFakeOctokit(queue: Array<Error | GetContentResult | string>): {
-  octokit: Octokit;
-  spy: ReturnType<typeof vi.fn>;
-} {
-  const spy = vi.fn(async () => {
-    const next = queue.shift();
-    if (next === undefined) throw new Error('fakeOctokit: queue exhausted');
-    if (next instanceof Error) throw next;
-    if (typeof next === 'string') return rawResponse(next);
-    return next;
-  });
-  const octokit = { rest: { repos: { getContent: spy } } } as unknown as Octokit;
-  return { octokit, spy };
-}
-
-function rawResponse(raw: string): GetContentResult {
-  return { data: raw } as unknown as GetContentResult;
-}
-
-describe('registry-client (Octokit-backed)', () => {
+describe('registry-client (ATK API-backed)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   describe('fetchRegistry', () => {
-    it('fetches, parses, and validates the registry via octokit.rest.repos.getContent', async () => {
+    it('fetches, parses, and validates the registry via GET /registry with the bearer token', async () => {
       const fixture = loadFixtureRegistry();
-      const { octokit, spy } = makeFakeOctokit([JSON.stringify(fixture)]);
+      const { calls } = stubFetch(() => jsonResponse(fixture));
 
-      const result = await fetchRegistry({ octokit, retry: fastRetry });
+      const result = await fetchRegistry({ client });
 
       expect(result.assets).toHaveLength(fixture.assets.length);
       expect(result.bundles?.[0]?.name).toBe('feature-workflow');
       expect(result.deprecated?.[0]?.name).toBe('old-validate');
 
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          mediaType: { format: 'raw' },
-          owner: 'EmergentSoftware',
-          path: 'registry.json',
-          repo: 'agentic-toolkit-registry',
-        }),
-      );
-    });
-
-    it('applies owner/repo/ref overrides', async () => {
-      const { octokit, spy } = makeFakeOctokit([JSON.stringify(loadFixtureRegistry())]);
-
-      await fetchRegistry({ octokit, owner: 'acme', ref: 'main', repo: 'registry', retry: fastRetry });
-
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ owner: 'acme', ref: 'main', repo: 'registry' }),
-      );
-    });
-
-    it('throws RegistryParseError on malformed JSON', async () => {
-      const { octokit } = makeFakeOctokit(['{not json']);
-
-      await expect(fetchRegistry({ octokit, retry: fastRetry })).rejects.toMatchObject({
-        constructor: RegistryParseError,
-        message: expect.stringContaining('not valid JSON'),
-      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.method).toBe('GET');
+      expect(calls[0]!.url).toBe(`${API_BASE}/registry`);
+      expect(calls[0]!.headers.get('authorization')).toBe('Bearer tok');
     });
 
     it('throws RegistryParseError when schema validation fails', async () => {
-      const { octokit } = makeFakeOctokit([JSON.stringify({ not: 'a registry' })]);
+      stubFetch(() => jsonResponse({ not: 'a registry' }));
 
-      const error = await fetchRegistry({ octokit, retry: fastRetry }).catch((e) => e);
+      const error = await fetchRegistry({ client }).catch((e) => e);
       expect(error).toBeInstanceOf(RegistryParseError);
       expect((error as RegistryParseError).zodError).toBeDefined();
       expect((error as RegistryParseError).message).toMatch(/schema validation/);
     });
 
     it('throws RegistryNotFoundError on 404 without retry', async () => {
-      const { octokit, spy } = makeFakeOctokit([httpError(404, 'not found')]);
+      const { calls } = stubFetch(() => apiErrorResponse(404, 'not_found', 'registry.json is missing'));
 
-      await expect(fetchRegistry({ octokit, retry: fastRetry })).rejects.toBeInstanceOf(RegistryNotFoundError);
-      expect(spy).toHaveBeenCalledTimes(1);
+      await expect(fetchRegistry({ client })).rejects.toBeInstanceOf(RegistryNotFoundError);
+      expect(calls).toHaveLength(1);
     });
 
     it('throws RegistryFetchError on transport failure (after exhausting retries)', async () => {
-      const { octokit } = makeFakeOctokit([
-        new TypeError('offline'),
-        new TypeError('offline'),
-      ]);
+      const { calls } = stubFetch(() => {
+        throw new TypeError('offline');
+      });
 
-      const error = await fetchRegistry({ octokit, retry: fastRetry }).catch((e) => e);
+      const error = await fetchRegistry({ client }).catch((e) => e);
       expect(error).toBeInstanceOf(RegistryFetchError);
-      expect((error as RegistryFetchError).cause).toBeInstanceOf(TypeError);
+      expect((error as RegistryFetchError).status).toBeUndefined();
+      expect((error as RegistryFetchError).message).toMatch(/could not reach the atk api/i);
+      expect(calls).toHaveLength(2);
     });
 
-    it('throws RegistryFetchError on non-retryable HTTP failure', async () => {
-      const { octokit } = makeFakeOctokit([httpError(403, 'forbidden')]);
+    it('throws RegistryFetchError carrying the status on non-retryable HTTP failure', async () => {
+      stubFetch(() => apiErrorResponse(403, 'not_org_member', 'Not a member'));
 
-      const error = await fetchRegistry({ octokit, retry: fastRetry }).catch((e) => e);
+      const error = await fetchRegistry({ client }).catch((e) => e);
       expect(error).toBeInstanceOf(RegistryFetchError);
       expect((error as RegistryFetchError).status).toBe(403);
+      expect((error as RegistryFetchError).message).toMatch(/EmergentSoftware/);
     });
 
     it('retries transient 503 responses', async () => {
-      const { octokit, spy } = makeFakeOctokit([
-        httpError(503, 'unavailable'),
-        JSON.stringify(loadFixtureRegistry()),
-      ]);
+      const { calls } = stubFetch((_req, index) =>
+        index === 0 ? textResponse('', 503, 'text/plain') : jsonResponse(loadFixtureRegistry()),
+      );
 
-      const result = await fetchRegistry({ octokit, retry: fastRetry });
+      const result = await fetchRegistry({ client });
       expect(result.assets.length).toBeGreaterThan(0);
-      expect(spy).toHaveBeenCalledTimes(2);
+      expect(calls).toHaveLength(2);
     });
   });
 
   describe('fetchAssetManifest', () => {
-    const manifestJson = JSON.stringify({
+    const manifest = {
       author: 'EmergentSoftware',
       description: 'd',
       entrypoint: 'AGENT.md',
@@ -150,128 +103,141 @@ describe('registry-client (Octokit-backed)', () => {
       org: 'agentic-toolkit',
       type: 'agent',
       version: '1.1.0',
-    });
+    };
 
-    it('builds the correct contents path with an org scope', async () => {
-      const { octokit, spy } = makeFakeOctokit([manifestJson]);
+    it('requests the manifest endpoint with the org as a query parameter', async () => {
+      const { calls } = stubFetch(() => jsonResponse(manifest));
 
       const result = await fetchAssetManifest(
         { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
-        { octokit, retry: fastRetry },
+        { client },
       );
 
       expect(result.name).toBe('validate');
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: 'assets/agents/@agentic-toolkit/validate/1.1.0/manifest.json',
-        }),
-      );
+      expect(calls[0]!.url).toBe(`${API_BASE}/assets/agent/validate/1.1.0/manifest?org=agentic-toolkit`);
     });
 
-    it('builds an unscoped path when org is omitted', async () => {
-      const manifest = JSON.stringify({
-        author: 'community',
-        description: 'd',
-        entrypoint: 'AGENT.md',
-        name: 'clarification-agent',
-        type: 'agent',
-        version: '1.0.0',
-      });
-      const { octokit, spy } = makeFakeOctokit([manifest]);
+    it('omits the org query when the asset is global', async () => {
+      const { calls } = stubFetch(() => jsonResponse({ ...manifest, name: 'clarification-agent', org: undefined }));
 
-      await fetchAssetManifest(
-        { name: 'clarification-agent', type: 'agent', version: '1.0.0' },
-        { octokit, retry: fastRetry },
-      );
+      await fetchAssetManifest({ name: 'clarification-agent', type: 'agent', version: '1.0.0' }, { client });
 
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: 'assets/agents/clarification-agent/1.0.0/manifest.json',
-        }),
-      );
+      expect(calls[0]!.url).toBe(`${API_BASE}/assets/agent/clarification-agent/1.0.0/manifest`);
+    });
+
+    it('throws RegistryParseError when the manifest fails the Zod guard', async () => {
+      stubFetch(() => jsonResponse({ name: 'broken' }));
+
+      await expect(
+        fetchAssetManifest({ name: 'broken', type: 'skill', version: '1.0.0' }, { client }),
+      ).rejects.toBeInstanceOf(RegistryParseError);
     });
   });
 
   describe('fetchAssetReadme', () => {
-    it('fetches README.md alongside the manifest path', async () => {
+    it('fetches README markdown as text', async () => {
       const markdown = '# Hello\n\nBody.';
-      const { octokit, spy } = makeFakeOctokit([markdown]);
+      const { calls } = stubFetch(() => textResponse(markdown));
 
       const result = await fetchAssetReadme(
         { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
-        { octokit, retry: fastRetry },
+        { client },
       );
 
       expect(result).toBe(markdown);
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: 'assets/agents/@agentic-toolkit/validate/1.1.0/README.md',
-        }),
-      );
+      expect(calls[0]!.url).toBe(`${API_BASE}/assets/agent/validate/1.1.0/readme?org=agentic-toolkit`);
     });
 
     it('returns null when the README is missing (HTTP 404)', async () => {
-      const { octokit } = makeFakeOctokit([httpError(404)]);
+      stubFetch(() => apiErrorResponse(404, 'not_found', 'No README'));
 
-      const result = await fetchAssetReadme(
-        { name: 'no-readme', type: 'skill', version: '1.0.0' },
-        { octokit, retry: fastRetry },
-      );
+      const result = await fetchAssetReadme({ name: 'no-readme', type: 'skill', version: '1.0.0' }, { client });
       expect(result).toBeNull();
     });
 
     it('propagates transport errors as RegistryFetchError', async () => {
-      const { octokit } = makeFakeOctokit([
-        new TypeError('offline'),
-        new TypeError('offline'),
-      ]);
+      stubFetch(() => {
+        throw new TypeError('offline');
+      });
 
-      await expect(
-        fetchAssetReadme({ name: 'x', type: 'skill', version: '1.0.0' }, { octokit, retry: fastRetry }),
-      ).rejects.toBeInstanceOf(RegistryFetchError);
+      await expect(fetchAssetReadme({ name: 'x', type: 'skill', version: '1.0.0' }, { client })).rejects.toBeInstanceOf(
+        RegistryFetchError,
+      );
+    });
+  });
+
+  describe('fetchAssetFiles', () => {
+    it('returns the API directory listing (manifest and README included)', async () => {
+      const listing = {
+        files: [
+          { path: 'AGENT.md', sha: 'a', size: 12 },
+          { path: 'README.md', sha: 'b', size: 34 },
+          { path: 'manifest.json', sha: 'c', size: 56 },
+          { path: 'reference/guide.md', sha: 'd', size: 78 },
+        ],
+        name: 'validate',
+        org: 'agentic-toolkit',
+        type: 'agent',
+        version: '1.1.0',
+      };
+      const { calls } = stubFetch(() => jsonResponse(listing));
+
+      const result = await fetchAssetFiles(
+        { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
+        { client },
+      );
+
+      expect(result.files.map((f) => f.path)).toEqual(['AGENT.md', 'README.md', 'manifest.json', 'reference/guide.md']);
+      expect(result.org).toBe('agentic-toolkit');
+      expect(calls[0]!.url).toBe(`${API_BASE}/assets/agent/validate/1.1.0/files?org=agentic-toolkit`);
+    });
+
+    it('normalises a null org to undefined', async () => {
+      stubFetch(() => jsonResponse({ files: [], name: 'x', org: null, type: 'skill', version: '1.0.0' }));
+
+      const result = await fetchAssetFiles({ name: 'x', type: 'skill', version: '1.0.0' }, { client });
+      expect(result.org).toBeUndefined();
+    });
+
+    it('throws RegistryNotFoundError for an unknown version', async () => {
+      stubFetch(() => apiErrorResponse(404, 'not_found', 'Unknown version'));
+
+      await expect(fetchAssetFiles({ name: 'x', type: 'skill', version: '9.9.9' }, { client })).rejects.toBeInstanceOf(
+        RegistryNotFoundError,
+      );
     });
   });
 
   describe('fetchBundleManifest', () => {
-    it('fetches a bundle.json by name', async () => {
-      const bundleJson = JSON.stringify({
+    it('fetches a global bundle.json by name and version', async () => {
+      const bundleJson = {
         assets: [{ name: 'dev-commands-rule', type: 'rule' }],
         author: 'EmergentSoftware',
         description: 'd',
         name: 'quality-bundle',
         version: '0.3.0',
-      });
-      const { octokit, spy } = makeFakeOctokit([bundleJson]);
+      };
+      const { calls } = stubFetch(() => jsonResponse(bundleJson));
 
-      const result = await fetchBundleManifest(
-        { name: 'quality-bundle', version: '0.3.0' },
-        { octokit, retry: fastRetry },
-      );
+      const result = await fetchBundleManifest({ name: 'quality-bundle', version: '0.3.0' }, { client });
       expect(result.name).toBe('quality-bundle');
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ path: 'bundles/quality-bundle/0.3.0/bundle.json' }),
-      );
+      expect(calls[0]!.url).toBe(`${API_BASE}/bundles/quality-bundle/0.3.0/manifest`);
     });
 
-    it('builds an @org-scoped path for an org bundle', async () => {
-      const bundleJson = JSON.stringify({
+    it('passes the org as a query parameter for an org bundle', async () => {
+      const bundleJson = {
         assets: [{ name: 'dev-commands-rule', type: 'rule' }],
         author: 'cupay',
         description: 'd',
         name: 'qa-bundle',
         org: 'cupay',
         version: '1.0.0',
-      });
-      const { octokit, spy } = makeFakeOctokit([bundleJson]);
+      };
+      const { calls } = stubFetch(() => jsonResponse(bundleJson));
 
-      const result = await fetchBundleManifest(
-        { name: 'qa-bundle', org: 'cupay', version: '1.0.0' },
-        { octokit, retry: fastRetry },
-      );
+      const result = await fetchBundleManifest({ name: 'qa-bundle', org: 'cupay', version: '1.0.0' }, { client });
       expect(result.name).toBe('qa-bundle');
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ path: 'bundles/@cupay/qa-bundle/1.0.0/bundle.json' }),
-      );
+      expect(calls[0]!.url).toBe(`${API_BASE}/bundles/qa-bundle/1.0.0/manifest?org=cupay`);
     });
   });
 

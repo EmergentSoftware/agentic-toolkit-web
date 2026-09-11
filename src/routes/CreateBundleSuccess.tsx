@@ -12,6 +12,8 @@ export interface CreateBundleSuccessState {
   branchName?: string;
   dryRun?: boolean;
   prUrl: string;
+  /** Non-blocking advice from the registry's validation. */
+  warnings?: string[];
 }
 
 export function CreateBundleSuccessRoute() {
@@ -72,6 +74,19 @@ export function CreateBundleSuccessRoute() {
               <p className='text-xs text-muted-foreground' data-testid='create-bundle-success-branch'>
                 Branch: <span className='font-mono'>{state.branchName}</span>
               </p>
+            ) : null}
+            {state.warnings && state.warnings.length > 0 ? (
+              <div
+                className='rounded-md border border-border bg-muted/40 p-3'
+                data-testid='create-bundle-success-warnings'
+              >
+                <p className='pb-1 text-xs font-semibold text-foreground'>Suggestions from the registry</p>
+                <ul className='list-disc pl-5 text-xs text-muted-foreground'>
+                  {state.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
           </CardContent>
         </Card>

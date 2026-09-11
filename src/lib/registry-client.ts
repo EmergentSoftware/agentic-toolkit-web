@@ -1,18 +1,29 @@
-import type { Octokit } from '@octokit/rest';
 import type { ZodType } from 'zod';
 
-import { callWithRetry, type RetryOptions } from './fetch-retry';
+import { z } from 'zod';
+
+import { getAssetManifest, getAssetReadme, getBundleManifest, getRegistry, listAssetFiles } from './api';
+import { type ApiClient, ApiRequestError, type ApiResult, unwrap } from './api-client';
 import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
-import {
-  assetPathSegments,
-  bundlePathSegments,
-  toRegistryPath,
-} from './registry-paths';
-import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
+import { AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
 import { type Registry, RegistrySchema } from './schemas/registry';
 
-export const DEFAULT_OWNER = 'EmergentSoftware';
-export const DEFAULT_REPO = 'agentic-toolkit-registry';
+/** One file in an asset version directory, as listed by the API. */
+export interface AssetFileEntry {
+  /** Path relative to the version directory, e.g. `SKILL.md` or `reference/guide.md`. */
+  path: string;
+  sha: string;
+  size: number;
+}
+
+/** The API's directory listing for an asset version (`manifest.json` and `README.md` included). */
+export interface AssetFileList {
+  files: AssetFileEntry[];
+  name: string;
+  org?: string;
+  type: AssetType;
+  version: string;
+}
 
 /** A pointer to a specific asset version in the registry. */
 export interface AssetManifestRef {
@@ -25,70 +36,89 @@ export interface AssetManifestRef {
 /** A pointer to a specific bundle version in the registry. */
 export interface BundleManifestRef {
   name: string;
-  /**
-   * Bare org name (no `@`) for org-scoped bundles; omit for global bundles.
-   * An org-scoped bundle resolves under `bundles/@{org}/{name}/{version}/`.
-   */
+  /** Bare org name (no `@`) for org-scoped bundles; omit for global bundles. */
   org?: string;
-  /** Bundle version — resolves to `bundles/[@{org}/]{name}/{version}/bundle.json`. Take it from the registry index entry's `version`. */
+  /** Bundle version (or `latest`). Take it from the registry index entry's `version`. */
   version: string;
 }
 
 /**
- * Common options accepted by every registry client call. An authenticated
- * Octokit instance is required — the CLI can no longer talk to the registry
- * without a signed-in, org-verified session.
+ * Common options accepted by every registry client call. A configured
+ * {@link ApiClient} is required: the web app cannot read the registry without
+ * a signed-in, org-verified session.
  */
 export interface RegistryClientOptions {
-  octokit: Octokit;
-  owner?: string;
-  ref?: string;
-  repo?: string;
-  retry?: RetryOptions;
+  client: ApiClient;
   signal?: AbortSignal;
 }
 
+const AssetFileListSchema = z.object({
+  files: z.array(z.object({ path: z.string(), sha: z.string(), size: z.number() })),
+  name: z.string(),
+  org: z.string().nullable().optional(),
+  type: AssetType,
+  version: z.string(),
+});
+
+/** Fetch the API's file listing for an asset version. */
+export async function fetchAssetFiles(ref: AssetManifestRef, options: RegistryClientOptions): Promise<AssetFileList> {
+  const label = `${describeAsset(ref)} file list`;
+  const result = await listAssetFiles({
+    client: options.client,
+    path: assetPath(ref),
+    query: orgQuery(ref.org),
+    signal: options.signal,
+  });
+  const parsed = parseResponse(unwrapRegistry(result, label), AssetFileListSchema, label);
+  return { ...parsed, org: parsed.org ?? undefined };
+}
+
 /** Fetch and validate a specific asset's `manifest.json`. */
-export async function fetchAssetManifest(
-  ref: AssetManifestRef,
-  options: RegistryClientOptions,
-): Promise<Manifest> {
-  const path = buildAssetManifestPath(ref);
-  return await fetchAndParse<Manifest>(path, ManifestSchema, options);
+export async function fetchAssetManifest(ref: AssetManifestRef, options: RegistryClientOptions): Promise<Manifest> {
+  const label = `${describeAsset(ref)} manifest`;
+  const result = await getAssetManifest({
+    client: options.client,
+    path: assetPath(ref),
+    query: orgQuery(ref.org),
+    signal: options.signal,
+  });
+  return parseResponse(unwrapRegistry(result, label), ManifestSchema, label);
 }
 
 /**
  * Fetch an asset's `README.md` as raw markdown. Returns null when the README
  * is absent (HTTP 404) so callers can degrade gracefully.
  */
-export async function fetchAssetReadme(
-  ref: AssetManifestRef,
-  options: RegistryClientOptions,
-): Promise<null | string> {
-  const manifestPath = buildAssetManifestPath(ref);
-  const readmePath = manifestPath.replace(/manifest\.json$/, 'README.md');
-  try {
-    return await fetchContent(readmePath, options);
-  } catch (error) {
-    if (error instanceof RegistryNotFoundError) return null;
-    throw error;
-  }
+export async function fetchAssetReadme(ref: AssetManifestRef, options: RegistryClientOptions): Promise<null | string> {
+  const result = await getAssetReadme({
+    client: options.client,
+    parseAs: 'text',
+    path: assetPath(ref),
+    query: orgQuery(ref.org),
+    signal: options.signal,
+  });
+  if (result.response?.status === 404) return null;
+  const data = unwrapRegistry(result, `${describeAsset(ref)} README`);
+  return typeof data === 'string' ? data : String(data);
 }
 
 /** Fetch and validate a bundle's `bundle.json` from its versioned registry path. */
-export async function fetchBundleManifest(
-  ref: BundleManifestRef,
-  options: RegistryClientOptions,
-): Promise<Bundle> {
-  const path = toRegistryPath(
-    bundlePathSegments({ name: ref.name, org: ref.org, version: ref.version }),
-  );
-  return await fetchAndParse<Bundle>(path, BundleSchema, options);
+export async function fetchBundleManifest(ref: BundleManifestRef, options: RegistryClientOptions): Promise<Bundle> {
+  const label = `bundle ${ref.org ? `@${ref.org}/` : ''}${ref.name}@${ref.version} manifest`;
+  const result = await getBundleManifest({
+    client: options.client,
+    path: { name: ref.name, version: ref.version },
+    query: orgQuery(ref.org),
+    signal: options.signal,
+  });
+  return parseResponse(unwrapRegistry(result, label), BundleSchema, label);
 }
 
-/** Fetch and validate the top-level `registry.json` from the GitHub registry repo. */
+/** Fetch and validate the registry index (`registry.json`) from the ATK API. */
 export async function fetchRegistry(options: RegistryClientOptions): Promise<Registry> {
-  return await fetchAndParse<Registry>('registry.json', RegistrySchema, options);
+  const label = 'the registry index';
+  const result = await getRegistry({ client: options.client, signal: options.signal });
+  return parseResponse(unwrapRegistry(result, label), RegistrySchema, label);
 }
 
 /**
@@ -102,9 +132,7 @@ export function findExistingAsset(
   query: { name: string; org?: string; type: AssetType },
 ): undefined | { latest: string; org?: string } {
   const { name, org, type } = query;
-  const match = registry.assets.find(
-    (a) => a.name === name && a.type === type && a.org === (org || undefined),
-  );
+  const match = registry.assets.find((a) => a.name === name && a.type === type && a.org === (org || undefined));
   if (!match) return undefined;
   return { latest: match.latest, org: match.org };
 }
@@ -126,90 +154,59 @@ export function findExistingBundle(
   return { latest: match.version, org: match.org };
 }
 
-function buildAssetManifestPath(ref: AssetManifestRef): string {
-  return toRegistryPath(assetPathSegments(ref, 'manifest.json'));
+function assetPath(ref: AssetManifestRef): { name: string; type: AssetType; version: string } {
+  return { name: ref.name, type: ref.type, version: ref.version };
 }
 
-function buildResourceLabel(path: string, options: RegistryClientOptions): string {
-  const owner = options.owner ?? DEFAULT_OWNER;
-  const repo = options.repo ?? DEFAULT_REPO;
-  const refSuffix = options.ref ? `@${options.ref}` : '';
-  return `${owner}/${repo}${refSuffix}:${path}`;
+function describeAsset(ref: AssetManifestRef): string {
+  return `${ref.type} ${ref.org ? `@${ref.org}/` : ''}${ref.name}@${ref.version}`;
 }
 
-async function fetchAndParse<T>(
-  path: string,
-  schema: ZodType<T>,
-  options: RegistryClientOptions,
-): Promise<T> {
-  const decoded = await fetchContent(path, options);
-  const label = buildResourceLabel(path, options);
+function orgQuery(org: string | undefined): undefined | { org?: string } {
+  return org ? { org } : undefined;
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(decoded);
-  } catch (cause) {
-    throw new RegistryParseError(`Registry content is not valid JSON: ${label}`, {
-      cause,
-      payload: decoded,
-      url: label,
-    });
-  }
-
-  const result = schema.safeParse(parsed);
+/** Validate an already-parsed API response body against a Zod schema. */
+function parseResponse<T>(data: unknown, schema: ZodType<T>, label: string): T {
+  const result = schema.safeParse(data);
   if (!result.success) {
     throw new RegistryParseError(`Registry content failed schema validation: ${label}`, {
-      payload: decoded,
+      payload: safeStringify(data),
       url: label,
       zodError: result.error,
     });
   }
-
   return result.data;
 }
 
-/**
- * Fetch the raw UTF-8 contents of a file from the registry repo via Octokit.
- *
- * Uses `mediaType: { format: 'raw' }` so GitHub returns the decoded file body
- * directly rather than a base64-encoded envelope.
- */
-async function fetchContent(path: string, options: RegistryClientOptions): Promise<string> {
-  const owner = options.owner ?? DEFAULT_OWNER;
-  const repo = options.repo ?? DEFAULT_REPO;
-  const label = buildResourceLabel(path, options);
-
-  let raw: unknown;
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') return value;
   try {
-    const response = await callWithRetry(
-      () =>
-        options.octokit.rest.repos.getContent({
-          mediaType: { format: 'raw' },
-          owner,
-          path,
-          repo,
-          ...(options.ref ? { ref: options.ref } : {}),
-          request: options.signal ? { signal: options.signal } : undefined,
-        }),
-      options.retry,
-      options.signal,
-    );
-    raw = response.data;
-  } catch (cause: unknown) {
-    if (options.signal?.aborted) throw cause;
-    const status = (cause as { status?: number }).status;
-    if (status === 404) {
-      throw new RegistryNotFoundError(`Registry resource not found: ${label}`, { url: label });
-    }
-    throw new RegistryFetchError(
-      `Registry request failed${status !== undefined ? ` with HTTP ${status}` : ''}: ${label}`,
-      { cause, status, url: label },
-    );
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
   }
+}
 
-  if (typeof raw === 'string') return raw;
-  throw new RegistryParseError(`Registry content was not a raw string: ${label}`, {
-    payload: String(raw),
-    url: label,
-  });
+/**
+ * {@link unwrap} an API result, translating failures into the registry error
+ * types the UI switches on: 404 → {@link RegistryNotFoundError}, everything
+ * else → {@link RegistryFetchError} (with the HTTP status when there was one).
+ */
+function unwrapRegistry<T>(result: ApiResult<T>, resource: string): T {
+  try {
+    return unwrap(result, resource);
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      if (error.status === 404) {
+        throw new RegistryNotFoundError(`Registry resource not found: ${resource}`, { url: resource });
+      }
+      throw new RegistryFetchError(error.message, {
+        cause: error,
+        status: error.status || undefined,
+        url: resource,
+      });
+    }
+    throw error;
+  }
 }

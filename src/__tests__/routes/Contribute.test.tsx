@@ -1,10 +1,10 @@
-import type { Octokit } from '@octokit/rest';
-
 import { Toast } from '@base-ui-components/react/toast';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import JSZip from 'jszip';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ApiClient } from '@/lib/api-client';
 
 import { Toaster } from '@/components/Toaster';
 import * as publishServiceModule from '@/lib/publish-service';
@@ -20,6 +20,7 @@ import {
 } from '@/routes/Contribute';
 
 import { loadFixtureRegistry } from '../fixtures';
+import { makeTestApiClient } from '../utils/api-stub';
 import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
 interface FakeDirTree {
@@ -89,11 +90,7 @@ function makeFakeEntry(name: string, fullPath: string, node: FakeDirTree | File)
           return;
         }
         readCount++;
-        cb(
-          childKeys.map((key) =>
-            makeFakeEntry(key, `${fullPath}/${key}`, node[key]!),
-          ),
-        );
+        cb(childKeys.map((key) => makeFakeEntry(key, `${fullPath}/${key}`, node[key]!)));
       },
     }),
     fullPath,
@@ -107,22 +104,16 @@ function makeFile(name: string, content = '# content') {
   return new File([content], name, { type: 'text/markdown' });
 }
 
-async function makeSkillFile(
-  name: string,
-  entries: Record<string, string | Uint8Array>,
-): Promise<File> {
+async function makeSkillFile(name: string, entries: Record<string, string | Uint8Array>): Promise<File> {
   const zip = new JSZip();
   for (const [path, content] of Object.entries(entries)) zip.file(path, content);
   const blob = await zip.generateAsync({ type: 'blob' });
   return new File([blob], name, { type: 'application/zip' });
 }
 
-function renderContribute(
-  login = 'test-user',
-  options: { initialEntries?: string[]; octokit?: null | Octokit } = {},
-) {
+function renderContribute(login = 'test-user', options: { api?: ApiClient | null; initialEntries?: string[] } = {}) {
   const session = makeSessionValue({
-    octokit: options.octokit ?? null,
+    api: options.api ?? null,
     status: 'member',
     user: { avatarUrl: null, login, name: null },
   });
@@ -359,9 +350,7 @@ describe('Contribute — wizard UI', () => {
     expect(screen.getByTestId('files-list')).not.toHaveTextContent('.skill');
 
     fireEvent.click(screen.getByTestId('wizard-next'));
-    expect((screen.getByTestId('field-name') as HTMLInputElement).value).toBe(
-      'emergent-qa-refinement',
-    );
+    expect((screen.getByTestId('field-name') as HTMLInputElement).value).toBe('emergent-qa-refinement');
     expect((screen.getByTestId('field-description') as HTMLInputElement).value).toBe(
       'Refines QA test cases into a structured plan.',
     );
@@ -406,16 +395,15 @@ describe('Contribute — wizard UI', () => {
   });
 
   it('runs a happy-path end-to-end submission and calls the publish service', async () => {
-    const publishSpy = vi
-      .spyOn(publishServiceModule, 'publishContribution')
-      .mockResolvedValue({
-        branchName: 'asset/skill/happy-path-skill/1.0.0',
-        dryRun: false,
-        prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/9',
-      });
+    const publishSpy = vi.spyOn(publishServiceModule, 'publishContribution').mockResolvedValue({
+      branchName: 'asset/skill/happy-path-skill/1.0.0',
+      dryRun: false,
+      prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/9',
+      warnings: [],
+    });
 
-    const fakeOctokit = { rest: {} } as unknown as Octokit;
-    renderContribute('octo-login', { octokit: fakeOctokit });
+    const fakeApi = makeTestApiClient();
+    renderContribute('octo-login', { api: fakeApi });
 
     // Step 1
     fireEvent.click(screen.getByTestId('asset-type-skill'));
@@ -447,6 +435,7 @@ describe('Contribute — wizard UI', () => {
 
     const callArgs = publishSpy.mock.calls[0]![0];
     expect(callArgs).toMatchObject({
+      client: fakeApi,
       dryRun: false,
       manifest: expect.objectContaining({
         author: 'octo-login',
@@ -454,12 +443,9 @@ describe('Contribute — wizard UI', () => {
         type: 'skill',
         version: '1.0.0',
       }),
-      octokit: fakeOctokit,
       readme: '# Hello',
     });
-    expect(callArgs.files).toEqual([
-      expect.objectContaining({ content: '# Skill', path: 'skill.md' }),
-    ]);
+    expect(callArgs.files).toEqual([expect.objectContaining({ content: '# Skill', path: 'skill.md' })]);
 
     await waitFor(() => {
       expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
@@ -467,18 +453,17 @@ describe('Contribute — wizard UI', () => {
   });
 
   it('enables dry-run mode when ?dryRun=1 is present in the URL', async () => {
-    const publishSpy = vi
-      .spyOn(publishServiceModule, 'publishContribution')
-      .mockResolvedValue({
-        branchName: 'asset/skill/dry-skill/1.0.0',
-        dryRun: true,
-        prUrl: publishServiceModule.DRY_RUN_PR_URL_MARKER,
-      });
+    const publishSpy = vi.spyOn(publishServiceModule, 'publishContribution').mockResolvedValue({
+      branchName: 'asset/skill/dry-skill/1.0.0',
+      dryRun: true,
+      prUrl: publishServiceModule.DRY_RUN_PR_URL_MARKER,
+      warnings: [],
+    });
 
-    const fakeOctokit = { rest: {} } as unknown as Octokit;
+    const fakeApi = makeTestApiClient();
     renderContribute('octo-login', {
+      api: fakeApi,
       initialEntries: ['/contribute?dryRun=1'],
-      octokit: fakeOctokit,
     });
 
     fireEvent.click(screen.getByTestId('asset-type-skill'));
@@ -511,8 +496,8 @@ describe('Contribute — wizard UI', () => {
 });
 
 describe('Contribute — version conflict detection', () => {
-  async function advanceToMetadata(octokit: Octokit) {
-    renderContribute('octo-login', { octokit });
+  async function advanceToMetadata(api: ApiClient) {
+    renderContribute('octo-login', { api });
     fireEvent.click(screen.getByTestId('asset-type-skill'));
     fireEvent.click(screen.getByTestId('wizard-next'));
     await uploadFiles([makeFile('skill.md', '# Skill')]);
@@ -524,8 +509,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('blocks Next and shows bump buttons when the version is not newer than the registry latest', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.2.0' });
     await flush();
 
@@ -543,8 +528,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('shows an update badge when the version is strictly greater than the registry latest', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.3.0' });
     await flush();
 
@@ -556,8 +541,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('shows no conflict UI when the asset name does not exist in the registry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     fillMetadata({ description: 'desc', name: 'brand-new-skill', version: '1.0.0' });
     await flush();
 
@@ -568,8 +553,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('carries the update badge into the Review step', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.3.0' });
     await flush();
     fireEvent.click(screen.getByTestId('wizard-next'));
@@ -580,8 +565,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('recomputes on org change — adding the matching org reveals the conflict panel', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    renderContribute('octo-login', { octokit });
+    const api = makeTestApiClient();
+    renderContribute('octo-login', { api });
     fireEvent.click(screen.getByTestId('asset-type-agent'));
     fireEvent.click(screen.getByTestId('wizard-next'));
     await uploadFiles([makeFile('agent.md', '# Agent')]);
@@ -602,8 +587,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('shows no conflict panel when an org-scoped draft shares a name with a global-only registry entry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     // "feature-skill" exists only as a global entry in the fixture; an org-scoped
     // draft of the same name+type must not be matched against it.
     fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.2.0' });
@@ -617,8 +602,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('shows no conflict panel when a global draft shares a name with an org-scoped-only registry entry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    renderContribute('octo-login', { octokit });
+    const api = makeTestApiClient();
+    renderContribute('octo-login', { api });
     fireEvent.click(screen.getByTestId('asset-type-agent'));
     fireEvent.click(screen.getByTestId('wizard-next'));
     await uploadFiles([makeFile('agent.md', '# Agent')]);
@@ -637,8 +622,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('shows no conflict panel when an org-scoped draft matches a different org-scoped registry entry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    renderContribute('octo-login', { octokit });
+    const api = makeTestApiClient();
+    renderContribute('octo-login', { api });
     fireEvent.click(screen.getByTestId('asset-type-agent'));
     fireEvent.click(screen.getByTestId('wizard-next'));
     await uploadFiles([makeFile('agent.md', '# Agent')]);
@@ -658,8 +643,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('still triggers the conflict panel when an org-scoped draft matches a same-org registry entry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    renderContribute('octo-login', { octokit });
+    const api = makeTestApiClient();
+    renderContribute('octo-login', { api });
     fireEvent.click(screen.getByTestId('asset-type-agent'));
     fireEvent.click(screen.getByTestId('wizard-next'));
     await uploadFiles([makeFile('agent.md', '# Agent')]);
@@ -676,8 +661,8 @@ describe('Contribute — version conflict detection', () => {
 
   it('still triggers the conflict panel when a global draft matches a global registry entry', async () => {
     vi.spyOn(registryClientModule, 'fetchRegistry').mockResolvedValue(loadFixtureRegistry());
-    const octokit = { rest: {} } as unknown as Octokit;
-    await advanceToMetadata(octokit);
+    const api = makeTestApiClient();
+    await advanceToMetadata(api);
     fillMetadata({ description: 'desc', name: 'feature-skill', version: '0.1.0' });
     await flush();
 
