@@ -5,6 +5,7 @@ import {
   fetchAssetManifest,
   fetchAssetReadme,
   fetchBundleManifest,
+  fetchBundleReadme,
   fetchRegistry,
   findExistingAsset,
   findExistingBundle,
@@ -238,6 +239,44 @@ describe('registry-client (ATK API-backed)', () => {
       const result = await fetchBundleManifest({ name: 'qa-bundle', org: 'cupay', version: '1.0.0' }, { client });
       expect(result.name).toBe('qa-bundle');
       expect(calls[0]!.url).toBe(`${API_BASE}/bundles/qa-bundle/1.0.0/manifest?org=cupay`);
+    });
+  });
+
+  describe('fetchBundleReadme', () => {
+    it('fetches a global bundle README as text', async () => {
+      const markdown = '# Quality bundle\n\nBody.';
+      const { calls } = stubFetch(() => textResponse(markdown));
+
+      const result = await fetchBundleReadme({ name: 'quality-bundle', version: '0.3.0' }, { client });
+
+      expect(result).toBe(markdown);
+      expect(calls[0]!.url).toBe(`${API_BASE}/bundles/quality-bundle/0.3.0/readme`);
+    });
+
+    it('passes the org as a query parameter for an org bundle', async () => {
+      const { calls } = stubFetch(() => textResponse('# QA'));
+
+      const result = await fetchBundleReadme({ name: 'qa-bundle', org: 'cupay', version: '1.0.0' }, { client });
+
+      expect(result).toBe('# QA');
+      expect(calls[0]!.url).toBe(`${API_BASE}/bundles/qa-bundle/1.0.0/readme?org=cupay`);
+    });
+
+    it('returns null when the README is missing (HTTP 404)', async () => {
+      stubFetch(() => apiErrorResponse(404, 'not_found', 'No README'));
+
+      const result = await fetchBundleReadme({ name: 'feature-workflow', version: '1.0.0' }, { client });
+      expect(result).toBeNull();
+    });
+
+    it('propagates transport errors as RegistryFetchError', async () => {
+      stubFetch(() => {
+        throw new TypeError('offline');
+      });
+
+      await expect(fetchBundleReadme({ name: 'x', version: '1.0.0' }, { client })).rejects.toBeInstanceOf(
+        RegistryFetchError,
+      );
     });
   });
 
