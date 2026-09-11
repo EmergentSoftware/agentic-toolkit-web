@@ -3,7 +3,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Bundle, Manifest, Registry } from '@/lib/schemas';
@@ -43,6 +43,12 @@ type BundleQueryShape = Partial<UseQueryResult<Bundle, Error>>;
 type ReadmeQueryShape = Partial<UseQueryResult<null | string, Error>>;
 type RegistryQueryShape = Partial<UseQueryResult<Registry, Error>>;
 
+/** Stands in for the Create Bundle route so tests can inspect the seed passed via navigation state. */
+function CreateBundleProbe() {
+  const location = useLocation();
+  return <pre data-testid='create-bundle-seed'>{JSON.stringify(location.state)}</pre>;
+}
+
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -50,6 +56,7 @@ function renderAt(path: string) {
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={[path]}>
           <Routes>
+            <Route element={<CreateBundleProbe />} path='/bundles/new' />
             <Route element={children} path='/bundles/:bundleId' />
             <Route element={children} path='/bundles/:org/:name' />
           </Routes>
@@ -345,6 +352,36 @@ describe('BundleDetailRoute', () => {
       expect.objectContaining({ name: 'qa-bundle', org: 'cupay', version: '2.0.0' }),
     );
     expect(screen.getByTestId('bundle-detail-org')).toHaveTextContent('cupay');
+  });
+
+  it('seeds Edit / New version with the current README so the next version starts from it', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: '# Feature workflow\n\nOverview.', isSuccess: true });
+    renderAt('/bundles/feature-workflow');
+
+    fireEvent.click(screen.getByTestId('bundle-detail-new-version'));
+
+    const seed = JSON.parse(screen.getByTestId('create-bundle-seed').textContent ?? 'null') as Record<string, unknown>;
+    expect(seed).toMatchObject({
+      name: 'feature-workflow',
+      readme: '# Feature workflow\n\nOverview.',
+      setupInstructions: FULL_BUNDLE.setupInstructions,
+      version: '1.1.0',
+    });
+  });
+
+  it('omits readme from the Edit / New version seed when the bundle has no README', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    setReadme({ data: null });
+    renderAt('/bundles/feature-workflow');
+
+    fireEvent.click(screen.getByTestId('bundle-detail-new-version'));
+
+    const seed = JSON.parse(screen.getByTestId('create-bundle-seed').textContent ?? 'null') as Record<string, unknown>;
+    expect(seed).toMatchObject({ name: 'feature-workflow' });
+    expect(seed).not.toHaveProperty('readme');
   });
 
   it('passes the bundle org to the download hook for an org-scoped bundle', () => {
