@@ -1,5 +1,8 @@
 /** Constants, types, and helpers for the GitHub OAuth session layer. */
 
+import { authGitHubExchange } from './api';
+import { ApiRequestError, createApiClient, unwrap } from './api-client';
+
 export const SESSION_STORAGE_KEYS = {
   oauthState: 'atk:session:oauth-state',
   pendingReturn: 'atk:session:pending-return',
@@ -16,12 +19,7 @@ export interface OAuthStateRecord {
 }
 
 /** Session status machine. */
-export type SessionStatus =
-  | 'authenticating'
-  | 'member'
-  | 'non-member'
-  | 'signed-out'
-  | 'verifying';
+export type SessionStatus = 'authenticating' | 'member' | 'non-member' | 'signed-out' | 'verifying';
 
 /** Build the GitHub authorize URL for an OAuth redirect. */
 export function buildAuthorizeUrl(params: {
@@ -89,29 +87,25 @@ export function defaultRedirectUri(): string {
   return `${window.location.origin}${base}/#/auth/callback`;
 }
 
-/** Exchange an OAuth code for an access token via the auth-function broker. */
+/**
+ * Exchange an OAuth code for an access token via the ATK API
+ * (`POST /auth/github/exchange`). The API holds the OAuth App's client secret
+ * and returns GitHub's token response verbatim.
+ */
 export async function exchangeCodeForToken(code: string, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(`${getAuthFunctionUrl()}/api/auth/exchange`, {
-    body: JSON.stringify({ code }),
-    headers: { 'Content-Type': 'application/json' },
-    method: 'POST',
-    signal,
-  });
+  const result = await authGitHubExchange({ body: { code }, client: createApiClient(null), signal });
 
-  if (!response.ok) {
-    let detail: string | undefined;
-    try {
-      const body = (await response.json()) as { error?: string; message?: string };
-      detail = body.message ?? body.error;
-    } catch {
-      // fallthrough
+  let payload: { access_token?: string };
+  try {
+    payload = unwrap(result, 'the sign-in token');
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      const status = error.status === 0 ? 'network error' : `HTTP ${error.status}`;
+      throw new Error(`Auth exchange failed (${status}): ${error.message}`, { cause: error });
     }
-    throw new Error(
-      `Auth exchange failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`,
-    );
+    throw error;
   }
 
-  const payload = (await response.json()) as { access_token?: string };
   if (!payload.access_token) {
     throw new Error('Auth exchange succeeded but response contained no access_token');
   }
@@ -130,17 +124,6 @@ export function generateOAuthState(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/** Read the auth-function broker URL from the Vite environment. */
-export function getAuthFunctionUrl(): string {
-  const value = import.meta.env.VITE_AUTH_FUNCTION_URL;
-  if (!value) {
-    throw new Error(
-      'VITE_AUTH_FUNCTION_URL is not set. Copy .env.example to .env.local and fill in your auth-function URL.',
-    );
-  }
-  return value.replace(/\/$/, '');
 }
 
 /** Read the OAuth client ID from the Vite environment. */

@@ -1,28 +1,7 @@
-import JSZip from 'jszip';
-
-import type { BundleAssetRef } from './schemas/bundle';
-
-import { fetchWithRetry, type RetryOptions } from './fetch-retry';
-import { collectFilePaths } from './file-list';
-import { RegistryFetchError, RegistryNotFoundError, RegistryParseError } from './registry-errors';
-import {
-  assetPathSegments,
-  bundlePathSegments,
-  encodePathSegment,
-  encodeRegistryPath,
-} from './registry-paths';
-import { type AssetType, type Bundle, BundleSchema, type Manifest, ManifestSchema } from './schemas';
-
-const DEFAULT_OWNER = 'EmergentSoftware';
-const DEFAULT_REPO = 'agentic-toolkit-registry';
-const GITHUB_API = 'https://api.github.com';
-
-/**
- * Files stripped from the top-level asset folder when downloading in `.skill`
- * format. A `.skill` archive is the same zip minus ATK's own metadata so it
- * drops cleanly into a Claude Code skills directory.
- */
-const SKILL_EXCLUDED_FILES = new Set(['manifest.json', 'README.md']);
+import { downloadAsset as apiDownloadAsset, downloadBundle as apiDownloadBundle } from './api';
+import { type ApiClient, ApiRequestError, type ApiResult, unwrap } from './api-client';
+import { RegistryFetchError, RegistryNotFoundError } from './registry-errors';
+import { type AssetType } from './schemas';
 
 export interface AssetRef {
   name: string;
@@ -32,34 +11,26 @@ export interface AssetRef {
 }
 
 export interface DownloadAssetOptions {
+  client: ApiClient;
   /** Archive variant; defaults to `zip`. */
   format?: DownloadFormat;
-  owner?: string;
-  ref?: string;
-  repo?: string;
-  retry?: RetryOptions;
   signal?: AbortSignal;
-  token?: string;
-  /** Injection seams for testing. */
+  /** Injection seam for testing. */
   triggerDownload?: (blob: Blob, filename: string) => void;
 }
 
-export interface DownloadBundleOptions extends DownloadAssetOptions {
+export interface DownloadBundleOptions {
+  client: ApiClient;
+  /** Archive variant; defaults to `zip`. */
+  format?: DownloadFormat;
   /**
    * Bare org name (no `@`) for org-scoped bundles; omit for global bundles.
-   * Locates the bundle under `bundles/@{org}/{name}/{version}/bundle.json`.
    */
   org?: string;
-  /**
-   * Resolve a version for a bundle member that omits its own `version`.
-   * Typically wired to the registry's `latest` field. Receives the member ref
-   * exactly as it appears in `bundle.json`.
-   */
-  resolveVersion?: (member: BundleAssetRef) => string | undefined;
-  /**
-   * The bundle's own version, used to locate `bundles/[@{org}/]{name}/{version}/bundle.json`.
-   * Take it from the registry index entry's `version`.
-   */
+  signal?: AbortSignal;
+  /** Injection seam for testing. */
+  triggerDownload?: (blob: Blob, filename: string) => void;
+  /** The bundle's own version (or `latest`). Take it from the registry index entry's `version`. */
   version: string;
 }
 
@@ -69,45 +40,26 @@ export interface DownloadBundleOptions extends DownloadAssetOptions {
  */
 export type DownloadFormat = 'skill' | 'zip';
 
-interface FetchedAssetBundle {
-  files: Map<string, Uint8Array>;
-  manifest: Manifest;
-  manifestBytes: Uint8Array;
-  ref: AssetRef;
-}
-
-interface FetchFileOptions {
-  tolerateMissing?: boolean;
-}
-
 /**
- * Fetch an asset and all its transitive dependencies, assemble them into a
- * JSZip archive, and trigger a browser download. The primary asset's files sit
- * flat at the zip root; each dependency is placed under `dependencies/{name}/`.
+ * Download an asset (with its transitive dependencies) as one archive built by
+ * the ATK API, then hand the blob to the browser. Layout: `{name}/…` plus
+ * `dependencies/{dep}/…`; `format: 'skill'` strips the top-level asset's
+ * metadata and names the file `{name}-{version}.skill`.
  */
 export async function downloadAsset(
   ref: AssetRef,
-  options: DownloadAssetOptions = {},
+  options: DownloadAssetOptions,
 ): Promise<{ blob: Blob; filename: string }> {
-  const visited = new Map<string, FetchedAssetBundle>();
-  const rootBundle = await fetchAssetBundle(ref, options, visited);
   const format = options.format ?? 'zip';
-
-  const zip = new JSZip();
-  const rootFolder = zip.folder(ref.name);
-  if (!rootFolder) throw new Error(`Failed to create zip folder for ${ref.name}`);
-  addBundleToZip(rootFolder, rootBundle, format === 'skill' ? SKILL_EXCLUDED_FILES : undefined);
-
-  for (const [key, bundle] of visited) {
-    if (key === refKey(ref)) continue;
-    const folder = zip.folder(`dependencies/${bundle.ref.name}`);
-    if (!folder) throw new Error(`Failed to create zip folder for ${bundle.ref.name}`);
-    addBundleToZip(folder, bundle);
-  }
-
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const ext = format === 'skill' ? 'skill' : 'zip';
-  const filename = `${ref.name}-${ref.version}.${ext}`;
+  const result = await apiDownloadAsset({
+    client: options.client,
+    parseAs: 'blob',
+    path: { name: ref.name, type: ref.type, version: ref.version },
+    query: { format, ...(ref.org ? { org: ref.org } : {}) },
+    signal: options.signal,
+  });
+  const blob = unwrapDownload(result, `${ref.type} ${ref.org ? `@${ref.org}/` : ''}${ref.name}@${ref.version}`);
+  const filename = `${ref.name}-${ref.version}.${format === 'skill' ? 'skill' : 'zip'}`;
 
   const trigger = options.triggerDownload ?? defaultTriggerDownload;
   trigger(blob, filename);
@@ -116,114 +68,30 @@ export async function downloadAsset(
 }
 
 /**
- * Fetch a bundle manifest and every member asset (with transitive dependencies)
- * and assemble a single JSZip archive. The bundle's `bundle.json` sits at the
- * zip root; each member asset's files are placed flat under `{memberName}/`.
- * Transitive dependencies of each member are placed under
- * `{memberName}/dependencies/{depName}/`.
- *
- * Member versions come from the {@link BundleAssetRef}; when a member omits
- * `version`, the optional `resolveVersion` callback is consulted (typically
- * wired to the registry's `latest`).
+ * Download a bundle as one archive built by the ATK API: `bundle.json` at the
+ * root and each member under `{member}/…` (`format: 'skill'` drops
+ * `bundle.json` and nests skill members as `{member}.skill`). The outer file
+ * keeps the `.zip` extension in both variants.
  */
 export async function downloadBundle(
   name: string,
   options: DownloadBundleOptions,
 ): Promise<{ blob: Blob; filename: string }> {
-  const bundle = await fetchBundleManifestForDownload(name, options);
   const format = options.format ?? 'zip';
-
-  const zip = new JSZip();
-  // The `.skill` variant drops ATK's own bundle metadata so the archive contains
-  // only drop-in assets.
-  if (format !== 'skill') {
-    zip.file('bundle.json', `${JSON.stringify(bundle, null, 2)}\n`);
-  }
-
-  for (const member of bundle.assets) {
-    const version = resolveMemberVersion(member, options);
-    if (!version) {
-      // An org-scoped member that resolves to no version means no asset exists
-      // in that scope (audit W4) — report the scope, not a generic version miss.
-      throw new Error(
-        member.org
-          ? `Bundle member '${member.name}' (${member.type}) not found in org '${member.org}'.`
-          : `Bundle member ${member.type}:${member.name} is missing a version and no resolver provided one.`,
-      );
-    }
-    const memberRef: AssetRef = { name: member.name, org: member.org, type: member.type, version };
-
-    // In `.skill` format, skill members become their own nested `.skill` archive
-    // so each one drops cleanly into a skills directory.
-    if (format === 'skill' && member.type === 'skill') {
-      const { blob } = await downloadAsset(memberRef, {
-        ...options,
-        format: 'skill',
-        triggerDownload: () => {},
-      });
-      zip.file(`${member.name}.skill`, blob);
-      continue;
-    }
-
-    const visited = new Map<string, FetchedAssetBundle>();
-    const rootBundle = await fetchAssetBundle(memberRef, options, visited);
-
-    const memberFolder = zip.folder(member.name);
-    if (!memberFolder) throw new Error(`Failed to create zip folder for ${member.name}`);
-    // Strip the member's own metadata in `.skill` format; dependency folders keep
-    // their manifests (matching downloadAsset's `.skill` behavior).
-    addBundleToZip(memberFolder, rootBundle, format === 'skill' ? SKILL_EXCLUDED_FILES : undefined);
-
-    for (const [key, dep] of visited) {
-      if (key === refKey(memberRef)) continue;
-      const depFolder = memberFolder.folder(`dependencies/${dep.ref.name}`);
-      if (!depFolder) throw new Error(`Failed to create zip folder for ${dep.ref.name}`);
-      addBundleToZip(depFolder, dep);
-    }
-  }
-
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const filename = `${bundle.name}-${bundle.version}.zip`;
+  const result = await apiDownloadBundle({
+    client: options.client,
+    parseAs: 'blob',
+    path: { name, version: options.version },
+    query: { format, ...(options.org ? { org: options.org } : {}) },
+    signal: options.signal,
+  });
+  const blob = unwrapDownload(result, `bundle ${options.org ? `@${options.org}/` : ''}${name}@${options.version}`);
+  const filename = `${name}-${options.version}.zip`;
 
   const trigger = options.triggerDownload ?? defaultTriggerDownload;
   trigger(blob, filename);
 
   return { blob, filename };
-}
-
-function addBundleToZip(zip: JSZip, bundle: FetchedAssetBundle, exclude?: Set<string>): void {
-  for (const [path, bytes] of bundle.files) {
-    if (exclude?.has(path)) continue;
-    zip.file(path, bytes);
-  }
-}
-
-function buildBundleManifestUrl(name: string, options: DownloadBundleOptions): string {
-  return buildContentsUrl(
-    bundlePathSegments({ name, org: options.org, version: options.version }),
-    options,
-  );
-}
-
-/** Compose a GitHub Contents API URL from raw registry path segments. */
-function buildContentsUrl(segments: string[], options: DownloadAssetOptions): string {
-  const owner = options.owner ?? DEFAULT_OWNER;
-  const repo = options.repo ?? DEFAULT_REPO;
-  const path = encodeRegistryPath(segments);
-  const base = `${GITHUB_API}/repos/${encodePathSegment(owner)}/${encodePathSegment(repo)}/contents/${path}`;
-  return options.ref ? `${base}?ref=${encodeURIComponent(options.ref)}` : base;
-}
-
-function buildFileUrl(ref: AssetRef, relativePath: string, options: DownloadAssetOptions): string {
-  return buildContentsUrl(assetPathSegments(ref, relativePath), options);
-}
-
-function decodeBase64(encoded: string): Uint8Array {
-  const sanitized = encoded.replace(/\s+/g, '');
-  const binary = atob(sanitized);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 function defaultTriggerDownload(blob: Blob, filename: string): void {
@@ -237,214 +105,20 @@ function defaultTriggerDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-async function fetchAssetBundle(
-  ref: AssetRef,
-  options: DownloadAssetOptions,
-  visited: Map<string, FetchedAssetBundle>,
-): Promise<FetchedAssetBundle> {
-  const key = refKey(ref);
-  const existing = visited.get(key);
-  if (existing) return existing;
-
-  const placeholder = {} as FetchedAssetBundle;
-  visited.set(key, placeholder);
-
-  const manifestBytes = await fetchFileBytes(ref, 'manifest.json', options);
-  const manifestUrl = buildFileUrl(ref, 'manifest.json', options);
-  const manifestText = new TextDecoder().decode(manifestBytes);
-  let parsed: unknown;
+function unwrapDownload(result: ApiResult<Blob | File>, resource: string): Blob {
   try {
-    parsed = JSON.parse(manifestText);
-  } catch (cause) {
-    throw new RegistryParseError(`Asset manifest is not valid JSON: ${manifestUrl}`, {
-      cause,
-      payload: manifestText,
-      url: manifestUrl,
-    });
-  }
-  const result = ManifestSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new RegistryParseError(`Asset manifest failed schema validation: ${manifestUrl}`, {
-      payload: manifestText,
-      url: manifestUrl,
-      zodError: result.error,
-    });
-  }
-  const manifest = result.data;
-
-  const files = new Map<string, Uint8Array>();
-  files.set('manifest.json', manifestBytes);
-
-  const extraPaths = collectFilePaths(manifest);
-
-  for (const path of extraPaths) {
-    const bytes = await fetchFileBytes(ref, path, options, { tolerateMissing: path === 'README.md' });
-    if (bytes) files.set(path, bytes);
-  }
-
-  const bundle: FetchedAssetBundle = { files, manifest, manifestBytes, ref };
-  visited.set(key, bundle);
-
-  if (manifest.dependencies && manifest.dependencies.length > 0) {
-    for (const dep of manifest.dependencies) {
-      if (!dep.version) {
-        throw new Error(
-          `Dependency ${dep.type}:${dep.name} is missing a version — an explicit version is required for download.`,
-        );
+    return unwrap(result, resource);
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      if (error.status === 404) {
+        throw new RegistryNotFoundError(`Registry resource not found: ${resource}`, { url: resource });
       }
-      const depRef: AssetRef = { name: dep.name, type: dep.type, version: dep.version };
-      await fetchAssetBundle(depRef, options, visited);
+      throw new RegistryFetchError(error.message, {
+        cause: error,
+        status: error.status || undefined,
+        url: resource,
+      });
     }
+    throw error;
   }
-
-  return bundle;
-}
-async function fetchBundleManifestForDownload(
-  name: string,
-  options: DownloadBundleOptions,
-): Promise<Bundle> {
-  const url = buildBundleManifestUrl(name, options);
-  const bytes = await fetchFileBytesRaw(url, options);
-  const text = new TextDecoder().decode(bytes);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (cause) {
-    throw new RegistryParseError(`Bundle manifest is not valid JSON: ${url}`, {
-      cause,
-      payload: text,
-      url,
-    });
-  }
-  const result = BundleSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new RegistryParseError(`Bundle manifest failed schema validation: ${url}`, {
-      payload: text,
-      url,
-      zodError: result.error,
-    });
-  }
-  return result.data;
-}
-
-async function fetchFileBytes(
-  ref: AssetRef,
-  relativePath: string,
-  options: DownloadAssetOptions,
-  fileOptions?: FetchFileOptions,
-): Promise<Uint8Array>;
-async function fetchFileBytes(
-  ref: AssetRef,
-  relativePath: string,
-  options: DownloadAssetOptions,
-  fileOptions: { tolerateMissing: true },
-): Promise<null | Uint8Array>;
-async function fetchFileBytes(
-  ref: AssetRef,
-  relativePath: string,
-  options: DownloadAssetOptions,
-  fileOptions: FetchFileOptions = {},
-): Promise<null | Uint8Array> {
-  const url = buildFileUrl(ref, relativePath, options);
-  const headers = new Headers({
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  });
-  if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
-
-  let response: Response;
-  try {
-    response = await fetchWithRetry(url, { headers, signal: options.signal }, options.retry);
-  } catch (cause) {
-    if (options.signal?.aborted) throw cause;
-    throw new RegistryFetchError(`Network error while fetching ${url}`, { cause, url });
-  }
-
-  if (response.status === 404) {
-    if (fileOptions.tolerateMissing) return null;
-    throw new RegistryNotFoundError(`Asset file not found: ${url}`, { url });
-  }
-
-  if (!response.ok) {
-    throw new RegistryFetchError(`Registry request failed with HTTP ${response.status}`, {
-      status: response.status,
-      url,
-    });
-  }
-
-  const rawBody = await response.text();
-  let envelope: { content?: string; encoding?: string };
-  try {
-    envelope = JSON.parse(rawBody) as { content?: string; encoding?: string };
-  } catch (cause) {
-    throw new RegistryParseError(`Registry response is not valid JSON: ${url}`, {
-      cause,
-      payload: rawBody,
-      url,
-    });
-  }
-
-  if (!envelope.content || envelope.encoding !== 'base64') {
-    throw new RegistryParseError(`Registry response is missing decodable base64 content: ${url}`, {
-      payload: rawBody,
-      url,
-    });
-  }
-
-  return decodeBase64(envelope.content);
-}
-async function fetchFileBytesRaw(url: string, options: DownloadBundleOptions): Promise<Uint8Array> {
-  const headers = new Headers({
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  });
-  if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
-
-  let response: Response;
-  try {
-    response = await fetchWithRetry(url, { headers, signal: options.signal }, options.retry);
-  } catch (cause) {
-    if (options.signal?.aborted) throw cause;
-    throw new RegistryFetchError(`Network error while fetching ${url}`, { cause, url });
-  }
-
-  if (response.status === 404) {
-    throw new RegistryNotFoundError(`Bundle manifest not found: ${url}`, { url });
-  }
-  if (!response.ok) {
-    throw new RegistryFetchError(`Registry request failed with HTTP ${response.status}`, {
-      status: response.status,
-      url,
-    });
-  }
-
-  const rawBody = await response.text();
-  let envelope: { content?: string; encoding?: string };
-  try {
-    envelope = JSON.parse(rawBody) as { content?: string; encoding?: string };
-  } catch (cause) {
-    throw new RegistryParseError(`Registry response is not valid JSON: ${url}`, {
-      cause,
-      payload: rawBody,
-      url,
-    });
-  }
-  if (!envelope.content || envelope.encoding !== 'base64') {
-    throw new RegistryParseError(`Registry response is missing decodable base64 content: ${url}`, {
-      payload: rawBody,
-      url,
-    });
-  }
-  return decodeBase64(envelope.content);
-}
-function refKey(ref: AssetRef): string {
-  return `${ref.type}:${ref.org ?? ''}:${ref.name}:${ref.version}`;
-}
-
-function resolveMemberVersion(
-  member: BundleAssetRef,
-  options: DownloadBundleOptions,
-): string | undefined {
-  if (member.version) return member.version;
-  return options.resolveVersion?.(member);
 }

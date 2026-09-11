@@ -41,7 +41,7 @@ export default tseslint.config(
 		},
 	},
 	{
-		ignores: ['**/dist/**', '**/node_modules/**', '**/*.js', '**/*.cjs'],
+		ignores: ['**/dist/**', '**/node_modules/**', '**/*.js', '**/*.cjs', 'src/lib/api/**'],
 	},
 	eslintConfigPrettier,
 );

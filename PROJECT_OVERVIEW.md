@@ -13,8 +13,9 @@ There are three repositories that make up the Agentic Toolkit ecosystem:
 | Repository | Role | Audience |
 |---|---|---|
 | `agentic-toolkit-registry` | The registry — where all skills, agents, rules, hooks, memory templates, and MCP configs live | Content store |
-| `agentic-toolkit` | The `atk` CLI — developer tool for installing/managing assets in local projects | Developers |
+| `agentic-toolkit-cli` | The `atk` CLI — developer tool for installing/managing assets in local projects | Developers |
 | `agentic-toolkit-web` *(this project)* | The web UI — browse registry assets and contribute new ones through a browser | **Non-technical users** (Product Managers, Technical Product Managers, Product Owners, designers, etc.) |
+| `Emergent.AgenticToolkit` (Azure DevOps) | The **ATK API** — the .NET API both the CLI and the web app talk to for registry reads, downloads, publishing, and the web sign-in exchange | Platform |
 
 ## 2. Purpose & Audience
 
@@ -45,7 +46,7 @@ Developers should continue to use the `atk` CLI. ATK Web deliberately does **not
   - Fields for name, description, README, type, tags.
   - On submit, opens a **pull request** against `agentic-toolkit-registry` (mirroring the CLI's `atk publish` flow) so the existing security review pipeline runs.
 - **Org support** — users can view assets scoped to their org or global assets.
-- **Auth via GitHub** (needed to open PRs against the private registry repo; read access may also require auth depending on registry visibility).
+- **Auth via GitHub** (the ATK API validates the token, gates on EmergentSoftware org membership, and opens PRs with it so they are authored by the user).
 
 ### Out of scope
 
@@ -54,11 +55,11 @@ Developers should continue to use the `atk` CLI. ATK Web deliberately does **not
 - Tool adapter placement logic (the web app doesn't place files into a project; it only downloads raw asset content).
 - Bundle management (initially — may be added later; browse/download of bundles could be a fast follow).
 - Editing existing assets in-place (MVP is create-new-only; edits can go through the CLI or PRs directly).
-- Server-side logic — this is a static site; all interactions happen in the browser against GitHub's API.
+- Server-side logic in this repo — this is a static site; every registry interaction goes through the shared ATK API, which lives in the `Emergent.AgenticToolkit` monorepo.
 
 ## 4. Tech Stack
 
-Intentionally small and conventional. No server, no backend — this is a fully static SPA deployed to GitHub Pages.
+Intentionally small and conventional. No server in this repo — this is a fully static SPA deployed to GitHub Pages that talks to the shared ATK API.
 
 ### Core
 - **Vite** — build tool and dev server.
@@ -73,12 +74,12 @@ Intentionally small and conventional. No server, no backend — this is a fully 
 ### Data & Forms
 - **TanStack Table** — asset browse/list view with sorting, filtering, column visibility.
 - **TanStack Form** — the "Contribute asset" form.
-- **TanStack Query** — data fetching, caching, and loading states against the GitHub API.
+- **TanStack Query** — data fetching, caching, and loading states against the ATK API.
 - **Zod** — schema validation for form inputs and for parsing registry data. **Reuse the Zod schemas exported from the `agentic-toolkit` CLI** (`scripts/export-schemas.ts` produces JSON Schema; ideally we vendor or publish the Zod schemas so the web app validates manifests identically to the CLI).
 
-### GitHub Integration
-- **Octokit** (`@octokit/rest`) — read the registry, create branches, commit files, and open PRs.
-- Auth via a **GitHub OAuth App** (standard web flow), with the `code`-for-token exchange handled by a tiny **Azure Function** (see §7 Authentication).
+### ATK API Integration
+- **`@hey-api/openapi-ts`** — generates a typed fetch client (`src/lib/api/`) from the API's vendored OpenAPI contract (`openapi/openapi.json`). `src/lib/api-client.ts` wraps it with the base URL (`VITE_ATK_API_URL`), bearer auth from the session token, retries, and error mapping.
+- Auth via a **GitHub OAuth App** (standard web flow), with the `code`-for-token exchange handled by the ATK API's `POST /auth/github/exchange` (see §7 Authentication).
 
 ### Tooling
 - **ESLint** + **Prettier** — match the conventions used in `agentic-toolkit`.
@@ -94,7 +95,7 @@ A filterable, searchable table/grid of all assets in the registry. Columns inclu
 - Click into an asset to see full details and the rendered README.
 
 ### Asset detail view
-Shows the full manifest info plus a rendered Markdown README. Primary action is a **Download** button that packages the asset's files into a zip (or downloads the folder directly via the File System Access API where supported) and hands them to the user.
+Shows the full manifest info, the file listing from the API, and a rendered Markdown README. Primary action is a **Download** button that fetches a zip (or `.skill` archive) built by the ATK API — the asset plus its transitive dependencies — and hands it to the user.
 
 ### Contribute flow (`atk publish` equivalent)
 A guided form where a non-technical user can:
@@ -104,57 +105,52 @@ A guided form where a non-technical user can:
 4. Select org scope (their org vs. global, where permitted).
 5. Submit.
 
-On submit, the app uses the signed-in user's GitHub credentials (via Octokit directly from the browser) to:
-1. **Fork** `EmergentSoftware/agentic-toolkit-registry` into the user's personal GitHub account — or reuse their existing fork if one is already present.
-2. **Create a new branch** on the fork (e.g. `contribute/<asset-type>-<asset-name>-<timestamp>`).
-3. **Commit** the asset files and generated manifest to that branch.
-4. **Open a pull request** from the user's fork branch back to the registry's default branch.
+On submit, the app sends the manifest and files to the ATK API's `POST /publish` (with `client: "web"`). The API validates the payload against the registry's JSON Schemas and rules, then — **using the signed-in user's own GitHub token** — creates a branch on `EmergentSoftware/agentic-toolkit-registry`, commits the files under `assets/{type}s/[@{org}/]{name}/{version}/`, and opens a pull request authored by the user. `?dryRun=1` sends the same payload to `POST /publish/plan`, which validates and returns the plan without touching GitHub.
 
-This is the same fork → branch → commit → PR pattern the `atk publish` CLI command uses. It works for **any EmergentSoftware org member** regardless of whether they have direct write access to the registry, since contributions always go through a personal fork.
+This is the same path the `atk publish` CLI command uses, so the branch, path, PR title, and body conventions are identical.
 
 The PR then runs through the **existing security review pipeline** in `agentic-toolkit-registry`. Assets are **never** merged directly — maintainer review is mandatory. The UI should make this clear to the user ("Your contribution will be reviewed before it appears in the registry") and show a success screen with a direct link to the opened PR.
 
 ### Org awareness
-The app reads the user's GitHub org memberships and lets them scope browsing and publishing to their org. This mirrors the org field in the CLI's lockfile.
+Assets and bundles may be org-scoped (`org` in the manifest; `@{org}/` in registry paths and `?org=` on API calls). The app lets users browse by org scope, publish org-scoped assets, and create org-scoped bundles. This mirrors the org field in the CLI's lockfile.
 
 ## 6. Architecture
 
 - **Static SPA.** Built with Vite, deployed to GitHub Pages via GitHub Actions.
-- **GitHub API as the backend.** Reads from `agentic-toolkit-registry` via the Contents API (same mechanism the CLI uses). Writes via the standard fork/branch/commit/PR flow — all done from the browser using Octokit.
-- **One tiny Azure Function for auth only.** Its sole responsibility is exchanging the OAuth `code` for an access token (see §7). It is not an API proxy — all registry reads and writes go directly from the browser to GitHub.
-- **Tokens live in the browser.** Access tokens are held in `sessionStorage` and never persisted to any server we operate. The Azure Function does not store tokens; it just brokers the handshake.
+- **The ATK API as the backend.** Every registry read (`GET /registry`, manifests, READMEs, file listings), every download (server-built zips), and every publish goes through the shared API; the browser never talks to GitHub's REST API directly. The CLI uses the same endpoints, so both clients see identical behaviour.
+- **Token passthrough.** The API validates the user's GitHub token and EmergentSoftware membership on each request and opens publish PRs with that same token, so PR authorship and the review workflow are unchanged from the CLI. The API never persists user tokens.
+- **Tokens live in the browser.** Access tokens are held in `sessionStorage` and never persisted to any server we operate.
 - **Registry schema parity with the CLI.** The web app validates and renders manifests using the same Zod schemas defined in `agentic-toolkit/src/lib/schemas/`. A valid asset in the CLI is a valid asset in the web UI, and vice versa.
 - **No duplicate registry.** The web app reads the canonical `registry.json` published by the registry repo's CI — the same artifact the CLI consumes.
 
 ## 7. Authentication
 
-### Approach: GitHub OAuth App + Azure Function token-exchange proxy
+### Approach: GitHub OAuth App + ATK API token exchange
 
-GitHub Pages is static-only, and GitHub's OAuth token-exchange endpoint does not support CORS from arbitrary browser origins. That rules out a pure-browser OAuth handshake. The minimum viable solution is a **tiny auth proxy** that holds the OAuth App's `client_secret` and handles the one `code`-for-token exchange. We are hosting this proxy as an **Azure Function** to match existing EmergentSoftware infra.
+GitHub Pages is static-only, and GitHub's OAuth token-exchange endpoint does not support CORS from arbitrary browser origins. That rules out a pure-browser OAuth handshake. The ATK API holds the OAuth App's `client_secret` and performs the one `code`-for-token exchange at `POST /auth/github/exchange` (this replaced the repo's earlier standalone `auth-function`).
 
 ### Components
 
 1. **GitHub OAuth App** registered under the EmergentSoftware org.
    - Callback URL: the deployed GitHub Pages URL.
    - Required scopes: `read:org` (to verify EmergentSoftware membership) and `repo` (to read the private registry, fork it, push to the user's fork, and open PRs).
-2. **Azure Function** (Consumption plan, Node.js/TypeScript).
-   - Single HTTP-triggered function: `POST /api/auth/exchange`.
-   - Accepts an OAuth `code`, calls `github.com/login/oauth/access_token` with the stored `client_secret`, returns the resulting access token to the SPA.
-   - `client_secret` lives in Function App application settings.
-   - CORS restricted to the GitHub Pages origin.
-   - Free tier is more than sufficient (1M requests/month). Cold starts of 1–3s are acceptable for a once-per-session event.
+2. **ATK API** (`func-atk-prod` / `func-atk-dev`, .NET on Azure Functions; deployed from the monorepo).
+   - `POST /auth/github/exchange` accepts an OAuth `code`, calls `github.com/login/oauth/access_token` with the stored `client_secret`, and returns GitHub's token response verbatim.
+   - The client secret lives in Key Vault; CORS is restricted to the SPA origins.
+   - Two OAuth Apps: the **dev** app's id is configured on the dev API (used by `pnpm dev`), the **prod** app's id on the prod API (used by GitHub Pages).
 3. **SPA auth flow.**
    - User clicks "Sign in with GitHub" → redirected to the OAuth App authorize screen.
    - GitHub redirects back to the SPA with a `code`.
-   - SPA `POST`s the code to the Azure Function → receives the access token.
-   - SPA stores the token in `sessionStorage` and uses Octokit directly for all subsequent GitHub API calls (those endpoints support CORS for authenticated requests).
+   - SPA `POST`s the code to `{VITE_ATK_API_URL}/auth/github/exchange` → receives the access token.
+   - SPA stores the token in `sessionStorage` and sends it as `Authorization: Bearer …` on every ATK API call.
 
 ### Org membership gate
 
-Immediately after auth, the SPA calls `GET /orgs/EmergentSoftware/members/{username}` to verify the user is a member of the EmergentSoftware GitHub organization.
+Immediately after auth, the SPA calls the API's `GET /me`. The API validates the token and checks EmergentSoftware membership itself:
 
-- **Member:** proceeds into the app.
-- **Non-member:** shown a friendly blocking screen explaining they must be a member of EmergentSoftware to use this tool, with contact guidance for being added.
+- **`200`:** active member — proceeds into the app; the response supplies the login, name, and avatar for display.
+- **`403 not_org_member` / `org_membership_unverifiable`:** shown a friendly blocking screen explaining they must be a member of EmergentSoftware to use this tool, with contact guidance for being added (the unverifiable case logs SAML / OAuth-App-approval hints to the console).
+- **`401`:** the stored token is dead; the app returns to the signed-out landing.
 
 ### End-user prerequisites
 
@@ -168,30 +164,32 @@ No PATs, no CLI, no terminal, no git knowledge required.
 
 ## 8. Deployment
 
-- **Web app:** GitHub Pages hosted from `EmergentSoftware/agentic-toolkit-web`. GitHub Actions pipeline builds the Vite app on push to `main` and publishes to Pages.
-- **Auth function:** deployed to Azure via GitHub Actions. Can live in the same repo under `/auth-function` or in a sibling repo — either works; same-repo is simpler for MVP.
-- **Branching:** match the other ATK repos' `develop` → `main` convention for consistency.
+- **Web app:** GitHub Pages hosted from `EmergentSoftware/agentic-toolkit-web`. GitHub Actions pipeline builds the Vite app on push to `main` (with `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_ATK_API_URL` from repo variables) and publishes to Pages. Merging to `main` is the production deploy.
+- **ATK API:** deployed from the `Emergent.AgenticToolkit` monorepo via Azure Pipelines; nothing in this repo deploys it.
+- **Branching:** feature branches off `main`, PRs to `main`.
 
 ## 9. Repository Layout (proposed)
 
 ```
 agentic-toolkit-web/
+├── openapi/openapi.json        # vendored ATK API contract (pnpm refresh-openapi)
+├── openapi-ts.config.ts        # @hey-api/openapi-ts config (pnpm generate-api)
 ├── src/
-│   ├── components/        # shadcn/ui components + app components
-│   ├── routes/            # page components (browse, detail, contribute)
+│   ├── components/             # shadcn/ui components + app components
+│   ├── routes/                 # page components (browse, detail, contribute, bundles)
 │   ├── lib/
-│   │   ├── github.ts      # Octokit client, auth, PR creation
-│   │   ├── registry.ts    # fetch + parse registry.json
-│   │   └── schemas/       # Zod schemas (vendored from agentic-toolkit)
-│   ├── hooks/
+│   │   ├── api/                # GENERATED typed client + types (do not edit)
+│   │   ├── api-client.ts       # base URL, bearer auth, retries, error mapping
+│   │   ├── session.ts          # OAuth redirect + code exchange helpers
+│   │   ├── registry-client.ts  # registry index, manifests, READMEs, file listings
+│   │   ├── download-service.ts # server-built zip / .skill downloads
+│   │   ├── publish-service.ts  # POST /publish and /publish/plan payloads
+│   │   └── schemas/            # Zod schemas (vendored from agentic-toolkit-cli)
+│   ├── hooks/                  # TanStack Query hooks (useRegistry, useAssetFiles, …)
+│   ├── providers/              # SessionProvider (token, GET /me, status machine)
 │   └── main.tsx
-├── auth-function/         # Azure Function for OAuth token exchange
-│   ├── src/
-│   │   └── exchange.ts    # POST /api/auth/exchange handler
-│   ├── host.json
-│   └── package.json
 ├── public/
-├── .github/workflows/     # build + deploy web; deploy auth function
+├── .github/workflows/          # validate PRs; build + deploy Pages on main
 ├── vite.config.ts
 ├── tsconfig.json
 ├── eslint.config.js
@@ -206,7 +204,7 @@ These are intentionally unresolved — they need a call before or during impleme
 2. **Download format.** Zip (via `jszip`) is universal. The File System Access API offers nicer UX on Chromium but needs a fallback. MVP recommendation: zip download.
 3. **Versioning / release process.** Does this repo need `semantic-release` like the CLI, or is trunk-based "deploy on merge to main" enough for a static site?
 4. **Bundles in MVP?** The registry has bundles (curated groups of assets). Recommend: read-only bundle browsing in MVP, no bundle authoring.
-5. **Auth function location.** In-repo under `/auth-function` (simpler) or separate repo (cleaner separation of concerns)? Lean toward in-repo for MVP.
+5. ~~**Auth function location.**~~ Resolved: the code exchange moved into the shared ATK API (2026-09); the in-repo `auth-function` was retired.
 
 ## 11. Success Criteria for MVP
 

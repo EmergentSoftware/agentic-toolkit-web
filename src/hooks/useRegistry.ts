@@ -4,19 +4,17 @@ import type { Registry } from '@/lib/schemas';
 
 import { useSession } from '@/hooks/useSession';
 import { queryKeys } from '@/lib/query-keys';
-import { fetchRegistry, type RegistryClientOptions } from '@/lib/registry-client';
+import { fetchRegistry } from '@/lib/registry-client';
 
-type RegistryHookOptions = Omit<RegistryClientOptions, 'octokit' | 'signal'>;
-
-/** Fetch and cache the top-level registry.json. Requires an authenticated session. */
-export function useRegistry(options?: RegistryHookOptions): UseQueryResult<Registry, Error> {
-  const { octokit } = useSession();
+/** Fetch and cache the registry index. Requires an authenticated session. */
+export function useRegistry(): UseQueryResult<Registry, Error> {
+  const { api } = useSession();
 
   return useQuery({
-    enabled: Boolean(octokit),
+    enabled: Boolean(api),
     queryFn: ({ signal }) => {
-      if (!octokit) throw new Error('useRegistry: no authenticated Octokit client available');
-      return fetchRegistry({ ...options, octokit, signal });
+      if (!api) throw new Error('useRegistry: no authenticated API client available');
+      return fetchRegistry({ client: api, signal });
     },
     queryKey: queryKeys.registry(),
   });

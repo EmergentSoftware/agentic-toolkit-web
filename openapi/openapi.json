@@ -1,0 +1,1838 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ATK API",
+    "version": "0.2.0",
+    "description": "The Agentic Tool Kit API: registry reads, publish, checkout and web sign-in for the ATK CLI and web app. Authenticate with `Authorization: Bearer <GitHub token>`; the caller must be an active member of the EmergentSoftware GitHub organisation."
+  },
+  "servers": [
+    {
+      "url": "https://func-atk-prod.azurewebsites.net",
+      "description": "Production"
+    },
+    {
+      "url": "https://func-atk-dev.azurewebsites.net",
+      "description": "Development"
+    },
+    {
+      "url": "http://localhost:7071",
+      "description": "Local `func start`"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Liveness probe",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "Health"
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This document",
+        "tags": [
+          "Meta"
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "OpenApi"
+      }
+    },
+    "/auth/github/exchange": {
+      "post": {
+        "summary": "Exchange a GitHub OAuth authorization code for an access token (web sign-in). GitHub's response body is returned verbatim.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthExchangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "GitHub token response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing code, or GitHub rejected it (`error` carries GitHub's OAuth error code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "OAuth app not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub unreachable or returned an unusable response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "AuthGitHubExchange"
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "The authenticated caller as resolved by the API",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Principal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "Me",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/registry": {
+      "get": {
+        "summary": "The registry index (`registry.json`) at the current commit. Supports `If-None-Match` with the `ETag` returned.",
+        "tags": [
+          "Registry"
+        ],
+        "responses": {
+          "200": {
+            "description": "registry.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetRegistry",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/assets/{type}/{name}/{version}/manifest": {
+      "get": {
+        "summary": "The asset version's `manifest.json`",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "description": "Asset type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact semver version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "manifest.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetAssetManifest",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/assets/{type}/{name}/{version}/readme": {
+      "get": {
+        "summary": "The asset version's `README.md`",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "description": "Asset type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact semver version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Markdown",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetAssetReadme",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/assets/{type}/{name}/{version}/files": {
+      "get": {
+        "summary": "Every file in the asset version directory (manifest and README included)",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "description": "Asset type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact semver version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "ListAssetFiles",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/assets/{type}/{name}/{version}/file/{path}": {
+      "get": {
+        "summary": "Raw bytes of one file in the asset version directory (path from the `files` listing)",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "description": "Asset type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact semver version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "File path relative to the version directory, e.g. `SKILL.md` or `reference/guide.md`",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetAssetFile",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/assets/{type}/{name}/{version}/download": {
+      "get": {
+        "summary": "Zip of the asset and its transitive dependencies. Layout: `{name}/…` plus `dependencies/{dep}/…`. `format=skill` omits the top-level manifest and README and uses the `.skill` extension.",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "description": "Asset type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact semver version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Archive variant",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "zip",
+                "skill"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archive",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "DownloadAsset",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/bundles/{name}/{version}/manifest": {
+      "get": {
+        "summary": "The bundle version's `bundle.json`",
+        "tags": [
+          "Bundles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bundle name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "bundle.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetBundleManifest",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/bundles/{name}/{version}/readme": {
+      "get": {
+        "summary": "The bundle version's `README.md`",
+        "tags": [
+          "Bundles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bundle name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Markdown",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GetBundleReadme",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/bundles/{name}/{version}/download": {
+      "get": {
+        "summary": "Zip of the bundle: `bundle.json` at the root and each member under `{member}/…`. `format=skill` drops `bundle.json` and nests skill members as `{member}.skill`.",
+        "tags": [
+          "Bundles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bundle name (bare, no @org prefix)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Exact version, or `latest`",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Archive variant",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "zip",
+                "skill"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archive",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "DownloadBundle",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/checkout/{name}": {
+      "get": {
+        "summary": "Everything `atk checkout` needs in one call: the asset resolved by name, with every file base64 encoded.",
+        "tags": [
+          "Assets"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Asset name (bare)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "query",
+            "required": false,
+            "description": "Org scope (bare name, no `@`). Omit for global assets.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Asset type; required only when the name exists as more than one type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skill",
+                "agent",
+                "rule",
+                "hook",
+                "memory-template",
+                "mcp-config"
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "description": "Exact version; defaults to `latest`",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Working copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ambiguous name (exists as several types) or bad type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown asset, version, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "Checkout",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/publish/plan": {
+      "post": {
+        "summary": "Validate a publish payload and return the plan (branch, path, PR title and body, files, reviewers, warnings) without touching GitHub.",
+        "tags": [
+          "Publish"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Payload failed schema or rule validation (`validation_failed`, `schema_invalid`, `invalid_reviewer`, `reviewers_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`version_not_bumped`, `version_exists`, or `branch_exists`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "PublishPlan",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    },
+    "/publish": {
+      "post": {
+        "summary": "Validate, then create the branch, commit and pull request on the registry with the caller's own token so the PR is authored by them. Global targets get the default reviewers; org targets use `reviewers`.",
+        "tags": [
+          "Publish"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Pull request opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Payload failed schema or rule validation (`validation_failed`, `schema_invalid`, `invalid_reviewer`, `reviewers_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`version_not_bumped`, `version_exists`, or `branch_exists`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "Publish",
+        "security": [
+          {
+            "githubToken": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "githubToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A GitHub token (OAuth, `gh auth token`, or PAT) with `read:org`, and `repo` for publishing."
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "description": "Error envelope",
+        "type": "object",
+        "properties": {
+          "error": {
+            "description": "Machine-readable error code",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable message",
+            "type": "string"
+          },
+          "details": {
+            "description": "Per-item problems for validation failures",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ApiErrorDetail"
+            },
+            "default": null
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      "ApiErrorDetail": {
+        "description": "One problem",
+        "type": "object",
+        "properties": {
+          "message": {
+            "description": "What is wrong",
+            "type": "string"
+          },
+          "path": {
+            "description": "JSON pointer into the payload, when applicable",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "CheckoutFile": {
+        "description": "One file with content",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Path relative to the version directory",
+            "type": "string"
+          },
+          "encoding": {
+            "description": "Always `base64`",
+            "type": "string"
+          },
+          "content": {
+            "description": "Base64 bytes",
+            "type": "string"
+          },
+          "size": {
+            "description": "Decoded size in bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "encoding",
+          "content",
+          "size"
+        ]
+      },
+      "CheckoutResponse": {
+        "description": "A working copy of one asset version",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Asset name",
+            "type": "string"
+          },
+          "org": {
+            "description": "Org scope",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "Asset type",
+            "type": "string",
+            "enum": [
+              "skill",
+              "agent",
+              "rule",
+              "hook",
+              "memory-template",
+              "mcp-config"
+            ]
+          },
+          "version": {
+            "description": "Resolved version",
+            "type": "string"
+          },
+          "files": {
+            "description": "Every file including manifest.json and README.md",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckoutFile"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "version",
+          "files"
+        ]
+      },
+      "FileEntry": {
+        "description": "A file in a version directory",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Path relative to the version directory",
+            "type": "string"
+          },
+          "sha": {
+            "description": "Git blob sha",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size in bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha",
+          "size"
+        ]
+      },
+      "FileListResponse": {
+        "description": "Directory listing",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Asset name",
+            "type": "string"
+          },
+          "org": {
+            "description": "Org scope",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "Asset type",
+            "type": "string",
+            "enum": [
+              "skill",
+              "agent",
+              "rule",
+              "hook",
+              "memory-template",
+              "mcp-config"
+            ]
+          },
+          "version": {
+            "description": "Resolved version",
+            "type": "string"
+          },
+          "files": {
+            "description": "Files, sorted by path",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "version",
+          "files"
+        ]
+      },
+      "HealthResponse": {
+        "description": "Liveness",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Always `ok`",
+            "type": "string"
+          },
+          "version": {
+            "description": "Assembly version",
+            "type": "string"
+          },
+          "environment": {
+            "description": "`Development` or `Production`",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "environment"
+        ]
+      },
+      "OAuthExchangeRequest": {
+        "description": "OAuth code exchange",
+        "type": "object",
+        "properties": {
+          "code": {
+            "description": "Authorization code from the GitHub redirect",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "OAuthTokenResponse": {
+        "description": "GitHub's token response, forwarded as-is",
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "description": "The user's GitHub token",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Granted scopes",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "token_type": {
+            "description": "`bearer`",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "access_token"
+        ]
+      },
+      "Principal": {
+        "description": "The authenticated caller",
+        "type": "object",
+        "properties": {
+          "scheme": {
+            "description": "Auth scheme that validated the token (`github`)",
+            "type": "string"
+          },
+          "login": {
+            "description": "GitHub login",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatarUrl": {
+            "description": "Avatar URL",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scheme",
+          "login"
+        ]
+      },
+      "PublishFile": {
+        "description": "A file to commit",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Path relative to the version directory (no dotfiles, no `..`)",
+            "type": "string"
+          },
+          "content": {
+            "description": "File content, text or base64 per `encoding`",
+            "type": "string"
+          },
+          "encoding": {
+            "description": "Defaults to `utf8`",
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ],
+            "default": "utf8"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      },
+      "PublishPlan": {
+        "description": "What a publish would do",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "asset or bundle",
+            "type": "string",
+            "enum": [
+              "asset",
+              "bundle"
+            ]
+          },
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "org": {
+            "description": "Org scope",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assetType": {
+            "description": "Asset type (assets only)",
+            "type": "string",
+            "enum": [
+              "skill",
+              "agent",
+              "rule",
+              "hook",
+              "memory-template",
+              "mcp-config",
+              null
+            ]
+          },
+          "version": {
+            "description": "Version being published",
+            "type": "string"
+          },
+          "isUpdate": {
+            "description": "True when the registry already has this asset or bundle",
+            "type": "boolean"
+          },
+          "previousVersion": {
+            "description": "The registry's current latest when isUpdate",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchName": {
+            "description": "Branch that will be pushed",
+            "type": "string"
+          },
+          "registryPath": {
+            "description": "Directory in the registry, with trailing slash",
+            "type": "string"
+          },
+          "prTitle": {
+            "description": "Pull request title",
+            "type": "string"
+          },
+          "prBody": {
+            "description": "Pull request body (markdown)",
+            "type": "string"
+          },
+          "files": {
+            "description": "Files that will be committed, in order",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reviewers": {
+            "description": "Reviewers that will be requested",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "description": "Non-blocking advice (missing README, tags, unlisted files)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "version",
+          "isUpdate",
+          "branchName",
+          "registryPath",
+          "prTitle",
+          "prBody",
+          "files",
+          "reviewers",
+          "warnings"
+        ]
+      },
+      "PublishRequest": {
+        "description": "Publish payload",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "What is being published",
+            "type": "string",
+            "enum": [
+              "asset",
+              "bundle"
+            ]
+          },
+          "manifest": {
+            "description": "The exact `manifest.json` (kind=asset) or `bundle.json` (kind=bundle) to commit. Validated against the registry's JSON Schema; `files` must be a concrete array.",
+            "type": "object"
+          },
+          "files": {
+            "description": "All other files: entrypoint, listed files, README.md. Bundles may only add README.md.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PublishFile"
+            },
+            "default": null
+          },
+          "message": {
+            "description": "Optional notes appended to the PR body",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "reviewers": {
+            "description": "Reviewers to request. Only allowed for org-scoped targets; global targets always get the default reviewers.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "default": null
+          },
+          "replaceExistingBranch": {
+            "description": "Delete and recreate the publish branch if it already exists (the CLI's retry behaviour). Default false → 409 `branch_exists`.",
+            "type": "boolean",
+            "default": false
+          },
+          "client": {
+            "description": "Which client is publishing; only affects the PR footer",
+            "type": "string",
+            "enum": [
+              "cli",
+              "web",
+              "api"
+            ],
+            "default": "api"
+          }
+        },
+        "required": [
+          "kind",
+          "manifest"
+        ]
+      },
+      "PublishResponse": {
+        "description": "Result of a publish",
+        "type": "object",
+        "properties": {
+          "prUrl": {
+            "description": "Pull request URL",
+            "type": "string"
+          },
+          "prNumber": {
+            "description": "Pull request number",
+            "type": "integer"
+          },
+          "branchName": {
+            "description": "Branch pushed",
+            "type": "string"
+          },
+          "commitSha": {
+            "description": "Commit created",
+            "type": "string"
+          },
+          "reviewers": {
+            "description": "Reviewers requested (the author is skipped)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reviewerWarning": {
+            "description": "Set when the reviewer request failed; the PR still exists",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "description": "Non-blocking advice from validation",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "prUrl",
+          "prNumber",
+          "branchName",
+          "commitSha",
+          "reviewers",
+          "warnings"
+        ]
+      }
+    }
+  }
+}

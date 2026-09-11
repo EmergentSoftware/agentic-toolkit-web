@@ -1,37 +1,42 @@
 # Production Deployment Runbook
 
-This document describes how to deploy, configure, rotate secrets for, and roll back the two components of ATK Web:
+This document describes how to deploy, configure, and roll back ATK Web.
 
 - **SPA** — a Vite-built static site published to GitHub Pages by `.github/workflows/deploy-pages.yml`.
-- **Auth function** — an Azure Functions v4 Node app (`auth-function/`) that brokers the GitHub OAuth code-for-token exchange, deployed by `.github/workflows/deploy-auth-function.yml`.
+- **ATK API** — the shared .NET API (`func-atk-prod` / `func-atk-dev` Azure Function Apps) that the SPA talks to for the OAuth code exchange, registry reads, downloads, and publishing. The API is built and deployed from the `Emergent.AgenticToolkit` monorepo in Azure DevOps; **nothing in this repo deploys it**.
 
-Both components deploy automatically on pushes to `main`. There is only one environment: **production**. There is no staging or deployment slot.
+The SPA deploys automatically on pushes to `main`. There is only one SPA environment: **production**, which talks to the **prod** API. Local development (`pnpm dev`) talks to the **dev** API.
 
 Related docs:
 
 - `docs/OAUTH_APP_SETUP.md` — full step-by-step OAuth App registration playbook (dev and prod).
 - `docs/PHASED_IMPLEMENTATION.md` — project-wide implementation phases.
+- `docs/Direction.md` and `docs/design/ClientContract.md` in the `Emergent.AgenticToolkit` monorepo — the API's contract and roadmap.
 
 ---
 
 ## 1. Architecture at a glance
 
 ```
-  GitHub Pages (SPA)                  Azure Functions (auth-function)
-  https://emergentsoftware              https://<function-app>.azurewebsites.net
-  .github.io/agentic-toolkit-web        /api/auth/exchange    (POST, CORS-gated)
-                                        /api/health           (GET, unauthenticated)
+  GitHub Pages (SPA)                  ATK API (Azure Functions, .NET)
+  https://emergentsoftware              https://func-atk-prod.azurewebsites.net   (prod, used by Pages)
+  .github.io/agentic-toolkit-web        https://func-atk-dev.azurewebsites.net    (dev, used by pnpm dev)
+                                          POST /auth/github/exchange   (OAuth code → token; CORS-gated)
+                                          GET  /me                     (identity + org-membership gate)
+                                          GET  /registry, /assets/…, /bundles/…   (reads, downloads)
+                                          POST /publish, /publish/plan            (open a registry PR)
 ```
 
 - The SPA runs entirely in the browser using `HashRouter`; no server-side routing is required.
-- The SPA calls `POST /api/auth/exchange` to swap a GitHub OAuth authorization code for an access token. The function holds the client secret and never exposes it to the browser.
-- `GET /api/health` is used by the deploy workflow's smoke test; it returns `{ status: "ok", version }` and is unauthenticated.
+- The SPA calls `POST /auth/github/exchange` to swap a GitHub OAuth authorization code for an access token. The API holds the OAuth App's client secret (in Key Vault) and never exposes it to the browser.
+- Every other call carries `Authorization: Bearer <GitHub token>`. The API validates the token and EmergentSoftware org membership and, for publishing, opens the pull request **with that same token** so the PR is authored by the user.
+- The API's OpenAPI contract is vendored at `openapi/openapi.json`; `src/lib/api/` is generated from it (`pnpm refresh-openapi && pnpm generate-api`).
 
 ---
 
 ## 2. One-time prerequisites
 
-Before the pipelines can run end-to-end, the following must exist.
+Before the pipeline can run end-to-end, the following must exist.
 
 ### 2.1 Production GitHub OAuth App
 
@@ -47,95 +52,66 @@ Register the OAuth App under the **EmergentSoftware** organization (not a person
 
 See `docs/OAUTH_APP_SETUP.md` §7–9 for the detailed walkthrough.
 
-### 2.2 Azure Function App configuration
+### 2.2 ATK API configuration
 
-The Function App must exist before the deploy workflow can push to it. On the Function App's **Configuration → Application settings** blade, set:
+The client id and secret live with the API, not this repo. The **prod** API must be configured with the prod OAuth App's id (`github_oauth_client_id` in the monorepo's `infra/envs/prod/main.tf`) and secret (`github-oauth-client-secret` in the prod Key Vault); the **dev** API uses the dev OAuth App. CORS on both Function Apps must allow the SPA origins (`http://localhost:5173` and `https://emergentsoftware.github.io`; setting `cors_allowed_origins`). See `infra/README.md` in the monorepo.
 
-| Key | Value | Notes |
-|---|---|---|
-| `GITHUB_OAUTH_CLIENT_ID` | Client ID from §2.1 | Safe to store as plain app setting. |
-| `GITHUB_OAUTH_CLIENT_SECRET` | Client secret from §2.1 | Treat as a secret. Consider a Key Vault reference (`@Microsoft.KeyVault(...)`). |
-| `CORS_ALLOWED_ORIGINS` | `https://emergentsoftware.github.io` | Must be the **origin** only (scheme + host), no path, no trailing slash. The SPA origin is the Pages host. |
+### 2.3 GitHub repo variables
 
-Notes:
-
-- Do **not** use the Azure Portal's built-in CORS blade — the function handles CORS itself in `cors.ts`, and the portal's CORS setting would conflict with those headers. Leave the portal CORS list empty.
-- After editing app settings the Function App restarts automatically. Wait ~30s before re-running the health probe.
-
-### 2.3 GitHub repo secrets & variables
-
-On the `EmergentSoftware/agentic-toolkit-web` repo's **Settings → Secrets and variables → Actions** page:
-
-**Repository secrets:**
+On the `EmergentSoftware/agentic-toolkit-web` repo's **Settings → Secrets and variables → Actions → Variables** page:
 
 | Name | Value |
 |---|---|
-| `AZURE_CREDENTIALS` | Full JSON output of a service principal with Contributor on the Function App's resource group. Create with: `az ad sp create-for-rbac --name "atk-web-deploy" --role contributor --scopes /subscriptions/<SUB_ID>/resourceGroups/<RG_NAME> --sdk-auth` — copy the entire JSON blob. |
+| `VITE_GITHUB_OAUTH_CLIENT_ID` | Client ID of the **prod** OAuth App from §2.1 (baked into the SPA bundle at build time; public). |
+| `VITE_ATK_API_URL` | `https://func-atk-prod.azurewebsites.net` (base URL only: no `/api`, no trailing slash). |
 
-**Repository variables:**
-
-| Name | Value |
-|---|---|
-| `VITE_GITHUB_OAUTH_CLIENT_ID` | Client ID from §2.1 (baked into the SPA bundle at build time). |
-| `VITE_AUTH_FUNCTION_URL` | `https://<function-app>.azurewebsites.net/api/auth/exchange` (full URL the SPA posts to). |
-| `AZURE_FUNCTION_APP_NAME` | The Azure Function App resource name (the `<function-app>` portion above, without domain). |
-
-The deploy workflow constructs the health URL as `https://${AZURE_FUNCTION_APP_NAME}.azurewebsites.net/api/health`, so the Function App name must resolve publicly under `azurewebsites.net`.
+The names must match exactly what `deploy-pages.yml` reads and `src/lib/api-client.ts` / `src/lib/session.ts` expect. No repository secrets are required for the SPA deploy.
 
 ---
 
-## 3. Normal deploy flow
-
-### 3.1 SPA (`deploy-pages.yml`)
+## 3. Normal deploy flow (`deploy-pages.yml`)
 
 Triggered on push to `main` (and manually via `workflow_dispatch`). Pipeline:
 
-1. **validate** — `pnpm install && pnpm lint && pnpm typecheck && pnpm test` for the web app, then the same sequence in `auth-function/`. A failure here blocks the Pages publish.
-2. **build** — `pnpm build` with `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_AUTH_FUNCTION_URL` injected from repo variables. Uploads `./dist` as a Pages artifact.
+1. **validate** — `pnpm install && pnpm lint && pnpm typecheck && pnpm test`. A failure here blocks the Pages publish.
+2. **build** — `pnpm build` with `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_ATK_API_URL` injected from repo variables. Uploads `./dist` as a Pages artifact.
 3. **deploy** — `actions/deploy-pages@v4` publishes the artifact to the `github-pages` environment.
 
 The SPA's `base` in `vite.config.ts` is `/agentic-toolkit-web/`, so all built asset URLs are prefixed correctly for the Pages subpath.
 
-### 3.2 Auth function (`deploy-auth-function.yml`)
+**Merging to `main` is the production cutover**: there is no staging site. Verify changes locally against the dev API first (`docs/OAUTH_APP_SETUP.md` §6).
 
-Triggered on push to `main` that touches `auth-function/**` (and manually). Pipeline:
+### 3.1 Picking up an API contract change
 
-1. `pnpm install --frozen-lockfile` → `pnpm lint` → `pnpm typecheck` → `pnpm test` → `pnpm build` in `auth-function/`.
-2. `pnpm prune --prod` — remove dev dependencies so the deploy package only ships what the runtime needs.
-3. `azure/login@v2` with `AZURE_CREDENTIALS`.
-4. `Azure/functions-action@v1` uploads `auth-function/` (minus `.funcignore` entries) to the Function App named by `AZURE_FUNCTION_APP_NAME`.
-5. **Smoke test** — `curl https://<app>.azurewebsites.net/api/health` with up to 6 retries (10s apart). Any non-200 fails the job.
+When the API's OpenAPI document changes:
 
-If the smoke test fails, the Function App has already received the new bits; follow the rollback procedure in §5.
+```bash
+pnpm refresh-openapi          # downloads openapi.json from the dev API (ATK_API_URL=… to override)
+pnpm generate-api             # regenerates src/lib/api/ (committed; never edit by hand)
+pnpm typecheck && pnpm test
+```
+
+Commit `openapi/openapi.json` and `src/lib/api/` together.
 
 ---
 
 ## 4. Rotating the OAuth client secret (zero downtime)
 
-GitHub supports **two concurrent client secrets per OAuth App**, which lets you cut over without a window where auth is broken.
+The client secret is held by the ATK API, so rotation is an API/Key Vault change, not an SPA change.
 
-1. **Generate a new secret.**
-   GitHub → EmergentSoftware → OAuth Apps → `ATK Web (production)` → **Generate a new client secret**. Copy it. Both the old and new secrets are now valid simultaneously.
-2. **Update the Function App to use the new secret.**
-   Azure Portal → Function App → Configuration → Application settings → edit `GITHUB_OAUTH_CLIENT_SECRET` → paste the new value → **Save**. The Function App restarts (~30s). New logins now use the new secret; the old secret is still accepted by GitHub, so any login already mid-flight continues to work.
-3. **Verify.**
-   ```bash
-   curl -sS https://<function-app>.azurewebsites.net/api/health   # expect {"status":"ok",...}
-   ```
-   Then perform a real sign-in against the SPA to confirm the code exchange succeeds.
-4. **Delete the old secret.**
-   Back on the OAuth App page, click the trash icon next to the old secret. From this point only the new secret is accepted.
+1. **Generate a new secret.** GitHub → EmergentSoftware → OAuth Apps → `ATK Web (production)` → **Generate a new client secret**. Both the old and new secrets are valid simultaneously.
+2. **Update the prod Key Vault secret** `github-oauth-client-secret` (see the monorepo's `infra/README.md`) and restart the prod Function App if the setting is not picked up automatically.
+3. **Verify** by signing in to the SPA on the production URL; the exchange must return `200` with an `access_token`.
+4. **Delete the old secret** on the OAuth App page.
 5. **Update the password manager** with the new secret and remove the old one.
 
-**Never** delete the old secret on GitHub before the Function App has been updated — that would immediately break production auth.
+**Never** delete the old secret on GitHub before the API has the new one — that would immediately break production sign-in.
 
 The SPA does not hold the client secret, so no SPA redeploy is ever required for a secret rotation. The **client ID** is public and stable; it does not rotate.
 
 ---
 
 ## 5. Rolling back a bad deploy
-
-### 5.1 Rolling back the SPA
 
 Each successful Pages deploy is a prior run of `deploy-pages.yml`. To roll back:
 
@@ -147,42 +123,7 @@ Re-running rebuilds the SPA from the same commit SHA that was previously known-g
 
 If the root cause is a bad commit already on `main`, revert it: `git revert <sha> && git push origin main`. That triggers a fresh `deploy-pages.yml` run with the revert applied.
 
-### 5.2 Rolling back the auth function
-
-Azure Functions does not keep historical slot snapshots in this configuration (no deployment slots are used). Two options, in order of preference:
-
-1. **Git revert and redeploy (preferred).**
-   Revert the offending commit on `main` and push:
-   ```bash
-   git revert <bad-sha>
-   git push origin main
-   ```
-   `deploy-auth-function.yml` runs automatically. The health smoke test gates the outcome.
-
-2. **Re-run the previous good workflow run.**
-   Actions → Deploy Auth Function → open the last green run → **Re-run all jobs**. This rebuilds and redeploys from the older commit SHA. Note: repo-variable or secret changes since that run (e.g. a rotated secret) remain in effect — only the function code is reverted.
-
-3. **Emergency manual redeploy.**
-   Check out the last good commit locally and push a zip deploy:
-   ```bash
-   cd auth-function
-   pnpm install --frozen-lockfile
-   pnpm build
-   pnpm prune --prod
-   zip -r ../deploy.zip . -x '*.test.ts' '__tests__/*' 'local.settings.json'
-   az functionapp deployment source config-zip \
-     --resource-group <RG_NAME> \
-     --name <FUNCTION_APP_NAME> \
-     --src ../deploy.zip
-   ```
-   Then verify `/api/health` manually.
-
-After any rollback, probe the health endpoint before declaring the incident over:
-
-```bash
-curl -sS https://<function-app>.azurewebsites.net/api/health
-# { "status": "ok", "version": "x.y.z" }
-```
+An API-side incident (the exchange, `/me`, or registry reads failing) is handled in the monorepo's pipelines, not here.
 
 ---
 
@@ -190,8 +131,10 @@ curl -sS https://<function-app>.azurewebsites.net/api/health
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| Sign-in fails with `origin_not_allowed` | `CORS_ALLOWED_ORIGINS` on the Function App doesn't match the Pages origin exactly. | App setting must be `https://emergentsoftware.github.io` — origin only, no path, no trailing slash. |
-| Sign-in fails with `server_misconfigured` | OAuth env vars missing on the Function App. | Confirm `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` are set on **Configuration → Application settings** (not just local.settings.json). |
-| SPA build-time vars empty in bundle | Repo variables renamed or missing. | Variables must be named `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_AUTH_FUNCTION_URL` — these names are baked into `src/lib/session.ts`. |
-| Deploy workflow succeeds but health smoke test fails | Function App still cold-starting, or runtime error at startup. | Check Log Stream in the Azure Portal. Re-run the job once; the smoke step retries 6× with 10s backoff, which normally absorbs cold-start. |
-| `azure/login` step fails with `AADSTS7000215` | `AZURE_CREDENTIALS` secret is stale or malformed. | Recreate the service principal (`az ad sp create-for-rbac --sdk-auth`) and replace the secret value with the new JSON blob. |
+| Sign-in fails with a CORS error in the browser console | The API's `cors_allowed_origins` does not include the SPA origin. | Must contain `https://emergentsoftware.github.io` (prod) / `http://localhost:5173` (dev) — origin only, no path, no trailing slash. |
+| Sign-in fails with `Auth exchange failed (HTTP 400): bad_verification_code` | The `code` was already used or expired, or the SPA's client id does not match the API's. | Local dev must use the **dev** OAuth App id (the dev API's id); Pages must use the **prod** id. Start the sign-in over. |
+| Sign-in fails with `Auth exchange failed (HTTP 500)` | The API is missing its OAuth configuration. | Check `github_oauth_client_id` and the Key Vault secret for that environment. |
+| App shows "Not authorized" for a known org member | `GET /me` returned `403 org_membership_unverifiable`. | SAML SSO not authorized for the token, or the OAuth App is not approved for the org (`https://github.com/orgs/EmergentSoftware/policies/applications`). The browser console logs the hint. |
+| App drops back to the signed-out landing on load | `GET /me` returned `401`; the stored token is dead. | Sign in again. |
+| `VITE_ATK_API_URL is not set` at startup | Repo variable or `.env.local` missing. | Variables must be named `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_ATK_API_URL`. |
+| Downloads fail with "The ATK API is unavailable" | API 5xx (usually GitHub upstream). | Retry; check the API's App Insights in Azure. |

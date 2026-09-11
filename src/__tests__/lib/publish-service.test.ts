@@ -1,37 +1,37 @@
 /* eslint-disable perfectionist/sort-modules */
-import type { Octokit } from '@octokit/rest';
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { PublishRequest } from '@/lib/api/types.gen';
 import type { Bundle } from '@/lib/schemas/bundle';
 import type { Manifest } from '@/lib/schemas/manifest';
 
 import {
   PublishBranchCollisionError,
+  PublishError,
   PublishNetworkError,
   PublishPermissionError,
   PublishRateLimitError,
+  PublishValidationError,
+  PublishVersionConflictError,
 } from '@/lib/publish-errors';
-import { DRY_RUN_PR_URL_MARKER, publishBundle, publishContribution } from '@/lib/publish-service';
+import {
+  buildAssetPublishRequest,
+  DRY_RUN_PR_URL_MARKER,
+  expectedBranchName,
+  publishBundle,
+  publishContribution,
+} from '@/lib/publish-service';
 
-const fastRetry = { baseDelayMs: 1, jitter: false, maxDelayMs: 5, maxRetries: 0 } as const;
+import {
+  API_BASE,
+  apiErrorResponse,
+  jsonResponse,
+  makeTestApiClient,
+  stubFetch,
+  textResponse,
+} from '../utils/api-stub';
 
-type Handler = (input: unknown) => Promise<unknown> | unknown;
-
-interface FakeOctokitResult {
-  octokit: Octokit;
-  spies: Record<keyof OctokitQueues, ReturnType<typeof vi.fn>>;
-}
-
-interface OctokitQueues {
-  createBlob?: Handler[];
-  createCommit?: Handler[];
-  createRef?: Handler[];
-  createTree?: Handler[];
-  getRef?: Handler[];
-  pullsCreate?: Handler[];
-  reposGet?: Handler[];
-}
+const client = makeTestApiClient('tok');
 
 function baseFiles() {
   return [{ content: '# Skill body', path: 'skill.md' }];
@@ -50,359 +50,320 @@ function baseManifest(): Manifest {
   } as Manifest;
 }
 
-function httpError(status: number, message = `HTTP ${status}`, extra: Record<string, unknown> = {}): Error & {
-  status: number;
-} {
-  const err = new Error(message) as Error & { status: number };
-  err.status = status;
-  Object.assign(err, extra);
-  return err;
-}
-
-function makeFakeOctokit(queues: OctokitQueues): FakeOctokitResult {
-  const spies = {
-    createBlob: queue(queues.createBlob),
-    createCommit: queue(queues.createCommit),
-    createRef: queue(queues.createRef),
-    createTree: queue(queues.createTree),
-    getRef: queue(queues.getRef),
-    pullsCreate: queue(queues.pullsCreate),
-    reposGet: queue(queues.reposGet),
-  } as Record<keyof OctokitQueues, ReturnType<typeof vi.fn>>;
-
-  const octokit = {
-    rest: {
-      git: {
-        createBlob: spies.createBlob,
-        createCommit: spies.createCommit,
-        createRef: spies.createRef,
-        createTree: spies.createTree,
-        getRef: spies.getRef,
-      },
-      pulls: { create: spies.pullsCreate },
-      repos: {
-        get: spies.reposGet,
-      },
+function publishedResponse(overrides: Record<string, unknown> = {}) {
+  return jsonResponse(
+    {
+      branchName: 'asset/skill/my-skill/1.0.0',
+      commitSha: 'abc123',
+      prNumber: 42,
+      prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/42',
+      reviewers: ['jasonpaff'],
+      warnings: [],
+      ...overrides,
     },
-  } as unknown as Octokit;
-
-  return { octokit, spies };
+    201,
+  );
 }
 
-function queue(items: Handler[] | undefined): ReturnType<typeof vi.fn> {
-  const pending = items ?? [];
-  return vi.fn(async (args: unknown) => {
-    const next = pending.shift();
-    if (!next) throw new Error('fakeOctokit queue exhausted');
-    const result = await next(args);
-    return result;
+function planResponse(overrides: Record<string, unknown> = {}) {
+  return jsonResponse({
+    assetType: 'skill',
+    branchName: 'asset/skill/my-skill/1.0.0',
+    files: ['manifest.json', 'skill.md'],
+    isUpdate: false,
+    kind: 'asset',
+    name: 'my-skill',
+    prBody: '## New Asset: my-skill',
+    prTitle: 'feat(registry): add skill my-skill@1.0.0',
+    registryPath: 'assets/skills/my-skill/1.0.0/',
+    reviewers: ['jasonpaff'],
+    version: '1.0.0',
+    warnings: ['No README.md'],
+    ...overrides,
   });
 }
 
-function happyPathQueues(): OctokitQueues {
-  return {
-    createBlob: [
-      () => ({ data: { sha: 'blob-1' } }),
-      () => ({ data: { sha: 'blob-2' } }),
-      () => ({ data: { sha: 'blob-3' } }),
-    ],
-    createCommit: [() => ({ data: { sha: 'commit-sha' } })],
-    createRef: [() => ({ data: {} })],
-    createTree: [() => ({ data: { sha: 'tree-sha' } })],
-    getRef: [
-      // upstream HEAD
-      () => ({ data: { object: { sha: 'base-sha' } } }),
-      // collision check for branch (404 = available)
-      () => {
-        throw httpError(404, 'not found');
-      },
-    ],
-    pullsCreate: [
-      () => ({ data: { html_url: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/42' } }),
-    ],
-    reposGet: [() => ({ data: { default_branch: 'main' } })],
-  };
+function bodyOf(index = 0): PublishRequest {
+  const call = calls()[index];
+  if (!call) throw new Error(`no request #${index}`);
+  return JSON.parse(call.body) as PublishRequest;
+}
+
+let recorded: ReturnType<typeof stubFetch> | undefined;
+function calls() {
+  if (!recorded) throw new Error('fetch not stubbed');
+  return recorded.calls;
 }
 
 afterEach(() => {
+  recorded = undefined;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('publishContribution', () => {
-  it('walks the full happy path and returns the created PR URL', async () => {
-    const { octokit, spies } = makeFakeOctokit(happyPathQueues());
+  it('POSTs the payload to /publish and returns the created PR', async () => {
+    recorded = stubFetch(() => publishedResponse());
     const progress: string[] = [];
 
     const result = await publishContribution({
+      client,
       files: baseFiles(),
       manifest: baseManifest(),
-      octokit,
       onProgress: (event) => progress.push(event.step),
       readme: '# Hello',
-      retry: fastRetry,
     });
 
-    expect(result.prUrl).toMatch(/pull\/42$/);
-    expect(result.dryRun).toBe(false);
-    expect(result.branchName).toBe('asset/skill/my-skill/1.0.0');
-    expect(progress).toEqual(['preparing-workspace', 'uploading-files', 'opening-pull-request']);
-
-    // 3 blobs: manifest.json + skill.md + README.md
-    expect(spies.createBlob).toHaveBeenCalledTimes(3);
-    expect(spies.createTree).toHaveBeenCalledTimes(1);
-    expect(spies.createCommit).toHaveBeenCalledTimes(1);
-    expect(spies.createRef).toHaveBeenCalledTimes(1);
-    expect(spies.pullsCreate).toHaveBeenCalledTimes(1);
-
-    // Single reposGet on upstream — no fork lookup.
-    expect(spies.reposGet).toHaveBeenCalledTimes(1);
-    expect(spies.reposGet).toHaveBeenCalledWith(
-      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
-    );
-
-    // All Git Data API calls target the upstream owner directly.
-    expect(spies.createBlob).toHaveBeenCalledWith(
-      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
-    );
-    expect(spies.createRef).toHaveBeenCalledWith(
-      expect.objectContaining({ owner: 'EmergentSoftware', repo: 'agentic-toolkit-registry' }),
-    );
-
-    expect(spies.pullsCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        base: 'main',
-        head: 'asset/skill/my-skill/1.0.0',
-        owner: 'EmergentSoftware',
-        repo: 'agentic-toolkit-registry',
-        title: 'feat(registry): add skill my-skill@1.0.0',
-      }),
-    );
-  });
-
-  it('throws PublishBranchCollisionError when the branch already exists', async () => {
-    const queues: OctokitQueues = {
-      ...happyPathQueues(),
-      getRef: [
-        // upstream HEAD
-        () => ({ data: { object: { sha: 'base-sha' } } }),
-        // collision check — ref EXISTS
-        () => ({ data: { object: { sha: 'existing' } } }),
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
-
-    await expect(
-      publishContribution({
-        files: baseFiles(),
-        manifest: baseManifest(),
-        octokit,
-        readme: '',
-        retry: fastRetry,
-      }),
-    ).rejects.toBeInstanceOf(PublishBranchCollisionError);
-  });
-
-  it('maps 429 responses to PublishRateLimitError', async () => {
-    const queues: OctokitQueues = {
-      reposGet: [
-        () => {
-          throw httpError(429, 'too many requests');
-        },
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
-
-    await expect(
-      publishContribution({
-        files: baseFiles(),
-        manifest: baseManifest(),
-        octokit,
-        readme: '',
-        retry: fastRetry,
-      }),
-    ).rejects.toBeInstanceOf(PublishRateLimitError);
-  });
-
-  it('maps 403 responses to PublishPermissionError', async () => {
-    const queues: OctokitQueues = {
-      reposGet: [
-        () => {
-          throw httpError(403, 'forbidden');
-        },
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
-
-    await expect(
-      publishContribution({
-        files: baseFiles(),
-        manifest: baseManifest(),
-        octokit,
-        readme: '',
-        retry: fastRetry,
-      }),
-    ).rejects.toBeInstanceOf(PublishPermissionError);
-  });
-
-  it('maps transport failures to PublishNetworkError', async () => {
-    const queues: OctokitQueues = {
-      reposGet: [
-        () => {
-          throw new TypeError('offline');
-        },
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
-
-    await expect(
-      publishContribution({
-        files: baseFiles(),
-        manifest: baseManifest(),
-        octokit,
-        readme: '',
-        retry: fastRetry,
-      }),
-    ).rejects.toBeInstanceOf(PublishNetworkError);
-  });
-
-  it('dry-run mode skips pulls.create and returns the synthesized marker URL', async () => {
-    const queues = happyPathQueues();
-    queues.pullsCreate = []; // must never be called
-    const { octokit, spies } = makeFakeOctokit(queues);
-
-    const result = await publishContribution({
-      dryRun: true,
-      files: baseFiles(),
-      manifest: baseManifest(),
-      octokit,
-      readme: '',
-      retry: fastRetry,
+    expect(result).toEqual({
+      branchName: 'asset/skill/my-skill/1.0.0',
+      dryRun: false,
+      prNumber: 42,
+      prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/42',
+      reviewers: ['jasonpaff'],
+      warnings: [],
     });
+    expect(progress).toEqual(['preparing-workspace', 'opening-pull-request']);
 
-    expect(result.dryRun).toBe(true);
-    expect(result.prUrl).toBe(DRY_RUN_PR_URL_MARKER);
-    expect(spies.pullsCreate).not.toHaveBeenCalled();
-    // The branch ref should still have been created so QA can verify the commit.
-    expect(spies.createRef).toHaveBeenCalledTimes(1);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.method).toBe('POST');
+    expect(calls()[0]!.url).toBe(`${API_BASE}/publish`);
+    expect(calls()[0]!.headers.get('authorization')).toBe('Bearer tok');
+    expect(calls()[0]!.headers.get('content-type')).toBe('application/json');
+
+    const body = bodyOf();
+    expect(body.kind).toBe('asset');
+    expect(body.client).toBe('web');
+    expect(body.manifest).toEqual(baseManifest());
+    // manifest.json comes from `manifest`; README is appended as a file.
+    expect(body.files).toEqual([
+      { content: '# Skill body', encoding: 'utf8', path: 'skill.md' },
+      { content: '# Hello\n', encoding: 'utf8', path: 'README.md' },
+    ]);
   });
 
-  it('prefixes committed files with the registry path including @org scope', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    const { octokit } = makeFakeOctokit(queues);
+  it('omits README.md from files when the readme is blank', async () => {
+    recorded = stubFetch(() => publishedResponse());
+
+    await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '   ' });
+
+    expect(bodyOf().files?.map((f) => f.path)).toEqual(['skill.md']);
+  });
+
+  it('drops uploaded manifest.json / README.md in favour of the wizard values', async () => {
+    recorded = stubFetch(() => publishedResponse());
 
     await publishContribution({
-      files: baseFiles(),
-      manifest: { ...baseManifest(), org: 'acme' } as Manifest,
-      octokit,
-      readme: '',
-      retry: fastRetry,
+      client,
+      files: [
+        { content: '{"stale":true}', path: 'manifest.json' },
+        { content: '# stale readme', path: 'README.md' },
+        { content: '# Skill body', path: 'SKILL.md' },
+      ],
+      manifest: baseManifest(),
+      readme: '# fresh',
     });
 
-    expect(treeSpy).toHaveBeenCalledTimes(1);
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/manifest.json');
-    expect(paths).toContain('assets/skills/@acme/my-skill/1.0.0/skill.md');
+    expect(bodyOf().files?.map((f) => f.path)).toEqual(['SKILL.md', 'README.md']);
+    expect(bodyOf().files?.find((f) => f.path === 'README.md')?.content).toBe('# fresh\n');
   });
 
   it('strips a common wrapper folder added by browser folder uploads', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    const { octokit } = makeFakeOctokit(queues);
+    recorded = stubFetch(() => publishedResponse());
 
     await publishContribution({
+      client,
       files: [
         { content: '# Skill body', path: 'emergent-brand/SKILL.md' },
         { content: '# Guide', path: 'emergent-brand/references/guide.md' },
       ],
       manifest: { ...baseManifest(), name: 'emergent-brand-skill' } as Manifest,
-      octokit,
       readme: '',
-      retry: fastRetry,
     });
 
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toContain('assets/skills/emergent-brand-skill/1.0.0/SKILL.md');
-    expect(paths).toContain('assets/skills/emergent-brand-skill/1.0.0/references/guide.md');
-    for (const p of paths) {
-      expect(p).not.toContain('/emergent-brand/');
-    }
+    const paths = bodyOf().files?.map((f) => f.path);
+    expect(paths).toEqual(['SKILL.md', 'references/guide.md']);
   });
 
-  it('leaves flat file drops unchanged', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    const { octokit } = makeFakeOctokit(queues);
+  it('leaves flat file drops and divergent top-level directories unchanged', async () => {
+    recorded = stubFetch(() => publishedResponse());
 
     await publishContribution({
-      files: [{ content: '# Skill body', path: 'SKILL.md' }],
-      manifest: baseManifest(),
-      octokit,
-      readme: '',
-      retry: fastRetry,
-    });
-
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toContain('assets/skills/my-skill/1.0.0/SKILL.md');
-    expect(paths).toContain('assets/skills/my-skill/1.0.0/manifest.json');
-  });
-
-  it('uploads base64 entries verbatim and utf8 entries re-encoded', async () => {
-    const queues = happyPathQueues();
-    const blobSpy = vi.fn((args: unknown) => {
-      const { content } = args as { content: string };
-      return { data: { sha: `blob-${content.slice(0, 6)}` } };
-    });
-    // manifest.json + SKILL.md + assets/logo.png = 3 blobs.
-    queues.createBlob = [blobSpy as Handler, blobSpy as Handler, blobSpy as Handler];
-    const { octokit } = makeFakeOctokit(queues);
-
-    const pngBase64 = 'iVBORw0KGgo='; // arbitrary base64 payload
-
-    await publishContribution({
-      files: [
-        { content: '# Skill body', encoding: 'utf8', path: 'SKILL.md' },
-        { content: pngBase64, encoding: 'base64', path: 'assets/logo.png' },
-      ],
-      manifest: baseManifest(),
-      octokit,
-      readme: '',
-      retry: fastRetry,
-    });
-
-    const contents = blobSpy.mock.calls.map((call) => (call[0] as { content: string }).content);
-    // Binary entry is passed through unchanged; text entry is base64-encoded.
-    expect(contents).toContain(pngBase64);
-    expect(contents).not.toContain('# Skill body');
-  });
-
-  it('preserves divergent top-level directories without stripping', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    const { octokit } = makeFakeOctokit(queues);
-
-    await publishContribution({
+      client,
       files: [
         { content: 'x', path: 'a/x.md' },
         { content: 'y', path: 'b/y.md' },
       ],
       manifest: baseManifest(),
-      octokit,
       readme: '',
-      retry: fastRetry,
     });
 
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toContain('assets/skills/my-skill/1.0.0/a/x.md');
-    expect(paths).toContain('assets/skills/my-skill/1.0.0/b/y.md');
+    expect(bodyOf().files?.map((f) => f.path)).toEqual(['a/x.md', 'b/y.md']);
+  });
+
+  it('sends base64 entries verbatim with their encoding and utf8 entries as text', async () => {
+    recorded = stubFetch(() => publishedResponse());
+    const pngBase64 = 'iVBORw0KGgo=';
+
+    await publishContribution({
+      client,
+      files: [
+        { content: '# Skill body', encoding: 'utf8', path: 'SKILL.md' },
+        { content: pngBase64, encoding: 'base64', path: 'assets/logo.png' },
+      ],
+      manifest: baseManifest(),
+      readme: '',
+    });
+
+    expect(bodyOf().files).toEqual([
+      { content: '# Skill body', encoding: 'utf8', path: 'SKILL.md' },
+      { content: pngBase64, encoding: 'base64', path: 'assets/logo.png' },
+    ]);
+  });
+
+  it('expands a files: "auto" manifest into the concrete uploaded list', () => {
+    const request = buildAssetPublishRequest({
+      files: [
+        { content: 'a', path: 'skill.md' },
+        { content: 'b', path: 'reference/notes.md' },
+      ],
+      manifest: { ...baseManifest(), files: 'auto' } as Manifest,
+      readme: '',
+    });
+
+    expect((request.manifest as { files: unknown }).files).toEqual(['reference/notes.md']);
+  });
+
+  it('keeps the org inside the manifest and predicts the org-scoped branch', () => {
+    const request = buildAssetPublishRequest({
+      files: baseFiles(),
+      manifest: { ...baseManifest(), org: 'acme' } as Manifest,
+      readme: '',
+    });
+
+    expect((request.manifest as { org?: string }).org).toBe('acme');
+    expect(expectedBranchName(request)).toBe('asset/skill/acme/my-skill/1.0.0');
+  });
+
+  it('dry-run mode POSTs to /publish/plan and returns the synthesized marker URL', async () => {
+    recorded = stubFetch(() => planResponse());
+    const progress: string[] = [];
+
+    const result = await publishContribution({
+      client,
+      dryRun: true,
+      files: baseFiles(),
+      manifest: baseManifest(),
+      onProgress: (event) => progress.push(event.step),
+      readme: '',
+    });
+
+    expect(result).toEqual({
+      branchName: 'asset/skill/my-skill/1.0.0',
+      dryRun: true,
+      prUrl: DRY_RUN_PR_URL_MARKER,
+      reviewers: ['jasonpaff'],
+      warnings: ['No README.md'],
+    });
+    expect(progress).toEqual(['preparing-workspace', 'uploading-files']);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.url).toBe(`${API_BASE}/publish/plan`);
+    expect(bodyOf().kind).toBe('asset');
+  });
+
+  it('maps 409 branch_exists to PublishBranchCollisionError naming the branch', async () => {
+    recorded = stubFetch(() => apiErrorResponse(409, 'branch_exists', 'Branch already exists'));
+
+    const error = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }).catch(
+      (e) => e,
+    );
+
+    expect(error).toBeInstanceOf(PublishBranchCollisionError);
+    expect((error as PublishBranchCollisionError).branchName).toBe('asset/skill/my-skill/1.0.0');
+  });
+
+  it('maps 409 version_not_bumped / version_exists to PublishVersionConflictError with the API message', async () => {
+    recorded = stubFetch(() => apiErrorResponse(409, 'version_not_bumped', '1.0.0 is not newer than 1.2.0'));
+
+    const error = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }).catch(
+      (e) => e,
+    );
+
+    expect(error).toBeInstanceOf(PublishVersionConflictError);
+    expect((error as PublishVersionConflictError).code).toBe('version_not_bumped');
+    expect((error as PublishError).userMessage).toBe('1.0.0 is not newer than 1.2.0');
+  });
+
+  it('maps 400 validation_failed / schema_invalid to PublishValidationError carrying details', async () => {
+    const details = [
+      { message: 'must match pattern ^[a-z]', path: '/manifest/name' },
+      { message: 'entrypoint skill.md is not in files', path: null },
+    ];
+    recorded = stubFetch(() => apiErrorResponse(400, 'validation_failed', 'Validation failed', details));
+
+    const error = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }).catch(
+      (e) => e,
+    );
+
+    expect(error).toBeInstanceOf(PublishValidationError);
+    expect((error as PublishValidationError).details).toEqual(details);
+    expect((error as PublishError).userMessage).toBe('Validation failed');
+  });
+
+  it('maps 401 and non-member 403 to PublishPermissionError', async () => {
+    recorded = stubFetch(() => apiErrorResponse(401, 'unauthorized', 'Bad token'));
+    await expect(
+      publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }),
+    ).rejects.toBeInstanceOf(PublishPermissionError);
+
+    recorded = stubFetch(() => apiErrorResponse(403, 'not_org_member', 'Not a member'));
+    await expect(
+      publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }),
+    ).rejects.toBeInstanceOf(PublishPermissionError);
+  });
+
+  it('surfaces other 400s (e.g. reviewers_not_allowed) as a PublishError with the API message', async () => {
+    recorded = stubFetch(() => apiErrorResponse(400, 'reviewers_not_allowed', 'Global targets cannot set reviewers'));
+
+    const error = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }).catch(
+      (e) => e,
+    );
+
+    expect(error).toBeInstanceOf(PublishError);
+    expect(error).not.toBeInstanceOf(PublishValidationError);
+    expect((error as PublishError).userMessage).toBe('Global targets cannot set reviewers');
+  });
+
+  it('maps 429 responses to PublishRateLimitError (after retries)', async () => {
+    recorded = stubFetch(() => apiErrorResponse(429, 'rate_limited', 'Slow down'));
+
+    await expect(
+      publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }),
+    ).rejects.toBeInstanceOf(PublishRateLimitError);
+    expect(calls().length).toBeGreaterThan(1);
+  });
+
+  it('maps transport failures and 5xx responses to PublishNetworkError', async () => {
+    recorded = stubFetch(() => {
+      throw new TypeError('offline');
+    });
+    await expect(
+      publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }),
+    ).rejects.toBeInstanceOf(PublishNetworkError);
+
+    recorded = stubFetch(() => textResponse('Bad Gateway', 502, 'text/plain'));
+    const error = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' }).catch(
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(PublishNetworkError);
+    expect((error as PublishNetworkError).status).toBe(502);
+  });
+
+  it('passes the reviewer warning through when the PR opened but reviewers failed', async () => {
+    recorded = stubFetch(() => publishedResponse({ reviewers: [], reviewerWarning: 'Could not request reviewers' }));
+
+    const result = await publishContribution({ client, files: baseFiles(), manifest: baseManifest(), readme: '' });
+
+    expect(result.reviewerWarning).toBe('Could not request reviewers');
   });
 });
 
@@ -421,85 +382,59 @@ function baseBundle(): Bundle {
 }
 
 describe('publishBundle', () => {
-  it('walks the full happy path and writes bundle.json under the versioned path', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    // bundle.json + README.md = 2 blobs
-    queues.createBlob = [() => ({ data: { sha: 'blob-1' } }), () => ({ data: { sha: 'blob-2' } })];
-    const { octokit, spies } = makeFakeOctokit(queues);
+  it('POSTs bundle.json as the manifest with kind=bundle and client=web', async () => {
+    recorded = stubFetch(() =>
+      publishedResponse({
+        branchName: 'bundle/feature-workflow/1.0.0',
+        prUrl: 'https://github.com/EmergentSoftware/agentic-toolkit-registry/pull/7',
+      }),
+    );
 
-    const result = await publishBundle({
-      bundle: baseBundle(),
-      octokit,
-      readme: '# Feature workflow',
-      retry: fastRetry,
-    });
+    const result = await publishBundle({ bundle: baseBundle(), client, readme: '# Feature workflow' });
 
     expect(result.dryRun).toBe(false);
     expect(result.branchName).toBe('bundle/feature-workflow/1.0.0');
-    expect(spies.createBlob).toHaveBeenCalledTimes(2);
+    expect(result.prUrl).toMatch(/pull\/7$/);
 
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toContain('bundles/feature-workflow/1.0.0/bundle.json');
-    expect(paths).toContain('bundles/feature-workflow/1.0.0/README.md');
-
-    expect(spies.pullsCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        head: 'bundle/feature-workflow/1.0.0',
-        title: 'feat(registry): add bundle feature-workflow@1.0.0',
-      }),
-    );
+    const body = bodyOf();
+    expect(body.kind).toBe('bundle');
+    expect(body.client).toBe('web');
+    expect(body.manifest).toEqual(baseBundle());
+    expect(body.files).toEqual([{ content: '# Feature workflow\n', encoding: 'utf8', path: 'README.md' }]);
   });
 
-  it('omits README.md when the readme is blank (bundle.json only)', async () => {
-    const queues = happyPathQueues();
-    const treeSpy = vi.fn(() => ({ data: { sha: 'tree-sha' } }));
-    queues.createTree = [treeSpy as Handler];
-    queues.createBlob = [() => ({ data: { sha: 'blob-1' } })];
-    const { octokit, spies } = makeFakeOctokit(queues);
+  it('sends no files when the readme is blank', async () => {
+    recorded = stubFetch(() => publishedResponse({ branchName: 'bundle/feature-workflow/1.0.0' }));
 
-    await publishBundle({ bundle: baseBundle(), octokit, readme: '', retry: fastRetry });
+    await publishBundle({ bundle: baseBundle(), client, readme: '' });
 
-    expect(spies.createBlob).toHaveBeenCalledTimes(1);
-    const treeArgs = (treeSpy.mock.calls[0]! as unknown as [{ tree: Array<{ path: string }> }])[0];
-    const paths = treeArgs.tree.map((entry) => entry.path);
-    expect(paths).toEqual(['bundles/feature-workflow/1.0.0/bundle.json']);
+    expect(bodyOf().files).toEqual([]);
   });
 
-  it('throws PublishBranchCollisionError when the bundle branch already exists', async () => {
-    const queues: OctokitQueues = {
-      ...happyPathQueues(),
-      getRef: [
-        () => ({ data: { object: { sha: 'base-sha' } } }),
-        () => ({ data: { object: { sha: 'existing' } } }),
-      ],
-    };
-    const { octokit } = makeFakeOctokit(queues);
+  it('keeps the org in bundle.json for org-scoped bundles and predicts the org branch on collision', async () => {
+    recorded = stubFetch(() => apiErrorResponse(409, 'branch_exists', 'exists'));
 
-    await expect(
-      publishBundle({ bundle: baseBundle(), octokit, readme: '', retry: fastRetry }),
-    ).rejects.toBeInstanceOf(PublishBranchCollisionError);
-  });
-
-  it('dry-run mode skips pulls.create and returns the synthesized marker URL', async () => {
-    const queues = happyPathQueues();
-    queues.createBlob = [() => ({ data: { sha: 'blob-1' } })];
-    queues.pullsCreate = [];
-    const { octokit, spies } = makeFakeOctokit(queues);
-
-    const result = await publishBundle({
-      bundle: baseBundle(),
-      dryRun: true,
-      octokit,
+    const error = await publishBundle({
+      bundle: { ...baseBundle(), name: 'qa-bundle', org: 'cupay' },
+      client,
       readme: '',
-      retry: fastRetry,
-    });
+    }).catch((e) => e);
+
+    expect((bodyOf().manifest as { org?: string }).org).toBe('cupay');
+    expect(error).toBeInstanceOf(PublishBranchCollisionError);
+    expect((error as PublishBranchCollisionError).branchName).toBe('bundle/cupay/qa-bundle/1.0.0');
+  });
+
+  it('dry-run mode POSTs to /publish/plan and returns the synthesized marker URL', async () => {
+    recorded = stubFetch(() =>
+      planResponse({ assetType: null, branchName: 'bundle/feature-workflow/1.0.0', kind: 'bundle', warnings: [] }),
+    );
+
+    const result = await publishBundle({ bundle: baseBundle(), client, dryRun: true, readme: '' });
 
     expect(result.dryRun).toBe(true);
     expect(result.prUrl).toBe(DRY_RUN_PR_URL_MARKER);
-    expect(spies.pullsCreate).not.toHaveBeenCalled();
-    expect(spies.createRef).toHaveBeenCalledTimes(1);
+    expect(result.branchName).toBe('bundle/feature-workflow/1.0.0');
+    expect(calls()[0]!.url).toBe(`${API_BASE}/publish/plan`);
   });
 });

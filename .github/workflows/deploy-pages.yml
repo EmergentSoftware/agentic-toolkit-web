@@ -41,22 +41,6 @@ jobs:
       - name: Test web
         run: pnpm test
 
-      - name: Install auth-function dependencies
-        working-directory: auth-function
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint auth-function
-        working-directory: auth-function
-        run: pnpm lint
-
-      - name: Type check auth-function
-        working-directory: auth-function
-        run: pnpm typecheck
-
-      - name: Test auth-function
-        working-directory: auth-function
-        run: pnpm test
-
   build:
     needs: validate
     runs-on: ubuntu-latest
@@ -77,7 +61,7 @@ jobs:
       - name: Build
         env:
           VITE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.VITE_GITHUB_OAUTH_CLIENT_ID }}
-          VITE_AUTH_FUNCTION_URL: ${{ vars.VITE_AUTH_FUNCTION_URL }}
+          VITE_ATK_API_URL: ${{ vars.VITE_ATK_API_URL }}
         run: pnpm build
 
       - uses: actions/upload-pages-artifact@v3

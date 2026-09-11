@@ -62,7 +62,7 @@ describe('AuthCallbackRoute', () => {
       JSON.stringify({ returnPath: '/bundles', state: 'abc-state' }),
     );
     const fetchMock = vi.fn(
-      async (_url: string, _init?: RequestInit) =>
+      async (_input: Request | string | URL, _init?: RequestInit) =>
         new Response(JSON.stringify({ access_token: 'gho_test-token' }), {
           headers: { 'content-type': 'application/json' },
           status: 200,
@@ -78,24 +78,31 @@ describe('AuthCallbackRoute', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const call = fetchMock.mock.calls[0];
     if (!call) throw new Error('fetch was not called');
-    expect(String(call[0])).toContain('/api/auth/exchange');
-    expect(call[1]?.method).toBe('POST');
+    const request = call[0] as Request;
+    expect(request.url).toBe('http://localhost:7071/auth/github/exchange');
+    expect(request.method).toBe('POST');
+    expect(request.headers.get('authorization')).toBeNull();
+    await expect(request.clone().json()).resolves.toEqual({ code: 'abc' });
   });
 
   it('renders an error when the exchange call fails', async () => {
-    window.sessionStorage.setItem(
-      SESSION_STORAGE_KEYS.oauthState,
-      JSON.stringify({ returnPath: '/', state: 'abc' }),
-    );
+    window.sessionStorage.setItem(SESSION_STORAGE_KEYS.oauthState, JSON.stringify({ returnPath: '/', state: 'abc' }));
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response('{"error":"invalid_request"}', { status: 400 })),
+      vi.fn(
+        async () =>
+          new Response('{"error":"bad_verification_code","message":"The code passed is incorrect or expired."}', {
+            headers: { 'content-type': 'application/json' },
+            status: 400,
+          }),
+      ),
     );
 
     renderCallback('?code=abc&state=abc');
 
     await waitFor(() =>
-      expect(screen.getByTestId('auth-callback-error')).toHaveTextContent(/auth exchange failed/i),
+      expect(screen.getByTestId('auth-callback-error')).toHaveTextContent(/auth exchange failed \(HTTP 400\)/i),
     );
+    expect(screen.getByTestId('auth-callback-error')).toHaveTextContent(/incorrect or expired/i);
   });
 });

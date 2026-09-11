@@ -1,4 +1,3 @@
-import type { Octokit } from '@octokit/rest';
 import type { UseQueryResult } from '@tanstack/react-query';
 
 import { Toast } from '@base-ui-components/react/toast';
@@ -7,6 +6,7 @@ import { type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ApiClient } from '@/lib/api-client';
 import type { Registry } from '@/lib/schemas';
 
 import { Toaster } from '@/components/Toaster';
@@ -22,14 +22,15 @@ import {
 } from '@/routes/CreateBundle';
 
 import { loadFixtureRegistry } from '../fixtures';
-import { makeSessionValue, SessionHarness, stubOctokit } from '../utils/session-harness';
+import { makeTestApiClient } from '../utils/api-stub';
+import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
 const useRegistryMock = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useRegistry', () => ({ useRegistry: useRegistryMock }));
 
-function renderCreateBundle(octokit: null | Octokit = stubOctokit(async () => ({ data: '' }))) {
+function renderCreateBundle(api: ApiClient | null = makeTestApiClient()) {
   const session = makeSessionValue({
-    octokit,
+    api,
     status: 'member',
     user: { avatarUrl: null, login: 'test-user', name: null },
   });
@@ -125,7 +126,12 @@ describe('CreateBundle — wizard flow', () => {
   it('walks metadata → assets → review and submits a bundle via publishBundle', async () => {
     const publishSpy = vi
       .spyOn(publishServiceModule, 'publishBundle')
-      .mockResolvedValue({ branchName: 'bundle/my-bundle/1.0.0', dryRun: false, prUrl: 'https://x/pull/1' });
+      .mockResolvedValue({
+        branchName: 'bundle/my-bundle/1.0.0',
+        dryRun: false,
+        prUrl: 'https://x/pull/1',
+        warnings: [],
+      });
 
     renderCreateBundle();
 

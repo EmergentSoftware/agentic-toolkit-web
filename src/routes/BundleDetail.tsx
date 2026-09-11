@@ -18,7 +18,6 @@ import { useBundleManifest } from '@/hooks/useBundleManifest';
 import { useDownloadBundle } from '@/hooks/useDownloadBundle';
 import { refKey as manifestRefKey, useManifestGraph } from '@/hooks/useManifestGraph';
 import { useRegistry } from '@/hooks/useRegistry';
-import { listAssetFiles } from '@/lib/file-list';
 import { type AssetManifestRef } from '@/lib/registry-client';
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { bumpVersion } from '@/lib/version-utils';
@@ -26,7 +25,11 @@ import { bumpVersion } from '@/lib/version-utils';
 export function BundleDetailRoute() {
   // Global bundles route as `/bundles/:bundleId`; org-scoped bundles as
   // `/bundles/:org/:name` (bare org, no `@` in the URL — §2 convention).
-  const { bundleId, name: nameParam, org: orgParam } = useParams<{
+  const {
+    bundleId,
+    name: nameParam,
+    org: orgParam,
+  } = useParams<{
     bundleId?: string;
     name?: string;
     org?: string;
@@ -58,6 +61,7 @@ export function BundleDetailRoute() {
         author: bundle.author,
         description: bundle.description,
         name: bundle.name,
+        ...(bundle.org ? { org: bundle.org } : {}),
         setupInstructions: bundle.setupInstructions,
         tags: bundle.tags,
         version: safeBumpMinor(bundle.version),
@@ -93,10 +97,7 @@ export function BundleDetailRoute() {
     () => collectMemberRefs(manifestQuery.data, memberVersions),
     [manifestQuery.data, memberVersions],
   );
-  const memberKeys = useMemo(
-    () => new Set(memberRefs.map((ref) => manifestRefKey(ref))),
-    [memberRefs],
-  );
+  const memberKeys = useMemo(() => new Set(memberRefs.map((ref) => manifestRefKey(ref))), [memberRefs]);
   const manifestGraph = useManifestGraph(memberRefs);
 
   if (!bundleName) {
@@ -172,7 +173,6 @@ export function BundleDetailRoute() {
                 void download(manifest.name, {
                   format,
                   org: bundleOrg,
-                  resolveVersion,
                   version: manifest.version,
                 })
               }
@@ -217,7 +217,14 @@ export function BundleDetailRoute() {
 
       <FilesCard
         error={manifestGraph.error}
-        groups={buildBundleFileGroups(manifest, memberRefs, memberKeys, manifestGraph.manifests, manifestGraph.order)}
+        groups={buildBundleFileGroups(
+          manifest,
+          memberRefs,
+          memberKeys,
+          manifestGraph.manifests,
+          manifestGraph.files,
+          manifestGraph.order,
+        )}
         isLoading={manifestGraph.isLoading}
         testId='bundle-detail-files'
       />
@@ -262,13 +269,15 @@ function buildBundleFileGroups(
   memberRefs: AssetManifestRef[],
   memberKeys: Set<string>,
   manifests: Map<string, Manifest>,
+  files: Map<string, string[]>,
   order: string[],
 ): FileGroup[] {
   const primaryFiles: string[] = ['bundle.json'];
   for (const ref of memberRefs) {
-    const member = manifests.get(manifestRefKey(ref));
+    const key = manifestRefKey(ref);
+    const member = manifests.get(key);
     if (!member) continue;
-    for (const path of listAssetFiles(member)) {
+    for (const path of files.get(key) ?? []) {
       primaryFiles.push(`${member.name}/${path}`);
     }
   }
@@ -284,7 +293,7 @@ function buildBundleFileGroups(
     const dep = manifests.get(key);
     if (!dep) continue;
     groups.push({
-      files: listAssetFiles(dep),
+      files: files.get(key) ?? [],
       name: dep.name,
       testId: `files-group-${dep.name}-${dep.version}`,
       version: dep.version,
@@ -319,13 +328,7 @@ function BundleMemberCard({
         </div>
       </CardHeader>
       <CardContent className='flex flex-col gap-1 text-xs text-muted-foreground'>
-        <span>
-          {version
-            ? `v${version}`
-            : member.org
-              ? `not found in org '${member.org}'`
-              : 'version unresolved'}
-        </span>
+        <span>{version ? `v${version}` : member.org ? `not found in org '${member.org}'` : 'version unresolved'}</span>
         {member.org ? <span>org: {member.org}</span> : null}
       </CardContent>
     </Card>

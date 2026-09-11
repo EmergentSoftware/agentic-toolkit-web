@@ -6,7 +6,7 @@ import { type ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { Bundle, Registry } from '@/lib/schemas';
+import type { Bundle, Manifest, Registry } from '@/lib/schemas';
 
 import { RegistryNotFoundError } from '@/lib/registry-errors';
 import { BundleDetailRoute } from '@/routes/BundleDetail';
@@ -19,7 +19,13 @@ const useDownloadBundleMock = vi.hoisted(() =>
   vi.fn(() => ({ download: vi.fn().mockResolvedValue(undefined), isDownloading: () => false })),
 );
 const useManifestGraphMock = vi.hoisted(() =>
-  vi.fn(() => ({ error: null, isLoading: false, manifests: new Map(), order: [] })),
+  vi.fn(() => ({
+    error: null as Error | null,
+    files: new Map<string, string[]>(),
+    isLoading: false,
+    manifests: new Map<string, Manifest>(),
+    order: [] as string[],
+  })),
 );
 
 vi.mock('@/hooks/useBundleManifest', () => ({ useBundleManifest: useBundleManifestMock }));
@@ -122,13 +128,51 @@ describe('BundleDetailRoute', () => {
 
     // validate has an explicit version + org
     const validateLink = within(assetsSection).getByRole('link', { name: /open validate/i });
-    expect(validateLink).toHaveAttribute(
-      'href',
-      '/assets/agent/validate/1.1.0?org=agentic-toolkit',
-    );
+    expect(validateLink).toHaveAttribute('href', '/assets/agent/validate/1.1.0?org=agentic-toolkit');
 
     const setup = screen.getByTestId('bundle-detail-setup');
     expect(within(setup).getByRole('heading', { level: 2, name: 'Setup' })).toBeInTheDocument();
+  });
+
+  it('lists bundle.json plus each member file from the API listing under the bundle group', () => {
+    setBundle({ data: FULL_BUNDLE, isSuccess: true });
+    setRegistry({ data: loadFixtureRegistry(), isSuccess: true });
+    const validateKey = 'agent:agentic-toolkit:validate:1.1.0';
+    useManifestGraphMock.mockReturnValue({
+      error: null,
+      files: new Map([[validateKey, ['AGENT.md', 'manifest.json', 'reference/checks.md']]]),
+      isLoading: false,
+      manifests: new Map([
+        [
+          validateKey,
+          {
+            author: 'x',
+            description: 'v',
+            entrypoint: 'AGENT.md',
+            name: 'validate',
+            org: 'agentic-toolkit',
+            type: 'agent',
+            version: '1.1.0',
+          } as Manifest,
+        ],
+      ]),
+      order: [validateKey],
+    });
+
+    renderAt('/bundles/feature-workflow');
+
+    const group = screen.getByTestId('files-group-feature-workflow');
+    expect(within(group).getByText('bundle.json')).toBeInTheDocument();
+    expect(within(group).getByText('validate/AGENT.md')).toBeInTheDocument();
+    expect(within(group).getByText('validate/reference/checks.md')).toBeInTheDocument();
+    useManifestGraphMock.mockReset();
+    useManifestGraphMock.mockReturnValue({
+      error: null,
+      files: new Map(),
+      isLoading: false,
+      manifests: new Map(),
+      order: [],
+    });
   });
 
   it('downloads the bundle in the chosen format from the header menu', () => {
@@ -144,7 +188,7 @@ describe('BundleDetailRoute', () => {
 
     expect(download).toHaveBeenCalledWith(
       'feature-workflow',
-      expect.objectContaining({ format: 'skill', resolveVersion: expect.any(Function), version: '1.0.0' }),
+      expect.objectContaining({ format: 'skill', version: '1.0.0' }),
     );
   });
 

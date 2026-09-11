@@ -1,724 +1,187 @@
-import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import type { Manifest } from '@/lib/schemas';
-import type { Bundle } from '@/lib/schemas';
 
 import { downloadAsset, downloadBundle } from '@/lib/download-service';
 import { RegistryFetchError, RegistryNotFoundError } from '@/lib/registry-errors';
 
-const fastRetry = { baseDelayMs: 1, jitter: false, maxDelayMs: 5, maxRetries: 2 } as const;
+import {
+  API_BASE,
+  apiErrorResponse,
+  blobResponse,
+  makeTestApiClient,
+  stubFetch,
+  textResponse,
+} from '../utils/api-stub';
 
-interface FakeAsset {
-  files: Record<string, string>;
-  manifest: Manifest;
-  org?: string;
+const client = makeTestApiClient('tok');
+
+/** Fake zip bytes; the API builds real archives, the client only forwards them. */
+const ZIP_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x01, 0x02, 0x03]);
+
+async function bytesOf(blob: Blob): Promise<number[]> {
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
 }
 
-function buildManifestBytes(manifest: Manifest): string {
-  return JSON.stringify(manifest, null, 2);
-}
-
-function buildUrl(
-  type: string,
-  name: string,
-  version: string,
-  path: string,
-  org?: string,
-): string {
-  const typeDir = `${type}s`;
-  const parts = ['assets', typeDir];
-  if (org) parts.push(`@${encodeURIComponent(org)}`);
-  parts.push(encodeURIComponent(name), encodeURIComponent(version), path);
-  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/${parts.join('/')}`;
-}
-
-function encodeBase64Text(text: string): { content: string; encoding: 'base64' } {
-  const bytes = new TextEncoder().encode(text);
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return { content: btoa(binary), encoding: 'base64' };
-}
-
-function okResponse(envelope: unknown): Response {
-  return new Response(JSON.stringify(envelope), { status: 200 });
-}
-
-async function readZipEntries(blob: Blob): Promise<Record<string, string>> {
-  const ab = await blob.arrayBuffer();
-  const zip = await JSZip.loadAsync(ab);
-  const entries: Record<string, string> = {};
-  for (const [path, file] of Object.entries(zip.files)) {
-    if (file.dir) continue;
-    entries[path] = await file.async('string');
-  }
-  return entries;
-}
-
-function setupFetchForAssets(assets: FakeAsset[]): ReturnType<typeof vi.fn> {
-  const urlMap = new Map<string, (() => Response) | Response>();
-  for (const asset of assets) {
-    const { name, type, version } = asset.manifest;
-    const manifestText = buildManifestBytes(asset.manifest);
-    urlMap.set(buildUrl(type, name, version, 'manifest.json', asset.org), okResponse(encodeBase64Text(manifestText)));
-    for (const [path, contents] of Object.entries(asset.files)) {
-      urlMap.set(buildUrl(type, name, version, path, asset.org), okResponse(encodeBase64Text(contents)));
-    }
-  }
-
-  return vi.fn(async (url: RequestInfo | URL) => {
-    const key = String(url);
-    const entry = urlMap.get(key);
-    if (!entry) {
-      return new Response('', { status: 404 });
-    }
-    return typeof entry === 'function' ? entry() : entry.clone();
-  });
+function parseUrl(url: string): { path: string; query: Record<string, string> } {
+  const parsed = new URL(url);
+  return { path: parsed.pathname, query: Object.fromEntries(parsed.searchParams.entries()) };
 }
 
 describe('downloadAsset', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('packages a single asset inside a {name}/ folder and preserves manifest bytes', async () => {
-    const manifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'validate',
-      entrypoint: 'AGENT.md',
-      files: ['AGENT.md'],
-      name: 'validate',
-      org: 'agentic-toolkit',
-      type: 'agent',
-      version: '1.1.0',
-    };
-    const readme = '# validate\n';
-    const agent = 'agent body';
-
-    const fetchMock = setupFetchForAssets([
-      {
-        files: { 'AGENT.md': agent, 'README.md': readme },
-        manifest,
-        org: 'agentic-toolkit',
-      },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('fetches the zip from the download endpoint and hands the blob to the browser', async () => {
+    const { calls } = stubFetch(() => blobResponse(ZIP_BYTES));
     const trigger = vi.fn();
+
     const result = await downloadAsset(
       { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
-      { retry: fastRetry, triggerDownload: trigger },
+      { client, triggerDownload: trigger },
     );
 
     expect(result.filename).toBe('validate-1.1.0.zip');
-    const entries = await readZipEntries(result.blob);
-    expect(Object.keys(entries).sort()).toEqual([
-      'validate/AGENT.md',
-      'validate/README.md',
-      'validate/manifest.json',
-    ]);
-    expect(entries['validate/manifest.json']).toBe(buildManifestBytes(manifest));
-    expect(entries['validate/AGENT.md']).toBe(agent);
-    expect(entries['validate/README.md']).toBe(readme);
+    expect(await bytesOf(result.blob)).toEqual(Array.from(ZIP_BYTES));
     expect(trigger).toHaveBeenCalledWith(result.blob, 'validate-1.1.0.zip');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('GET');
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer tok');
+    expect(parseUrl(calls[0]!.url)).toEqual({
+      path: '/assets/agent/validate/1.1.0/download',
+      query: { format: 'zip', org: 'agentic-toolkit' },
+    });
+    expect(calls[0]!.url.startsWith(API_BASE)).toBe(true);
   });
 
-  it('preserves nested subdirectories declared in manifest.files', async () => {
-    const manifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'skill with refs',
-      entrypoint: 'SKILL.md',
-      files: [
-        'SKILL.md',
-        'references/data-conventions.md',
-        'references/naming-conventions.md',
-      ],
-      name: 'transactional-sql',
-      type: 'skill',
-      version: '1.0.2',
-    };
-
-    const fetchMock = setupFetchForAssets([
-      {
-        files: {
-          'README.md': '# readme',
-          'references/data-conventions.md': 'data conv',
-          'references/naming-conventions.md': 'naming conv',
-          'SKILL.md': '# skill',
-        },
-        manifest,
-      },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { blob } = await downloadAsset(
-      { name: 'transactional-sql', type: 'skill', version: '1.0.2' },
-      { retry: fastRetry, triggerDownload: vi.fn() },
-    );
-
-    const entries = await readZipEntries(blob);
-    expect(Object.keys(entries).sort()).toEqual([
-      'transactional-sql/README.md',
-      'transactional-sql/SKILL.md',
-      'transactional-sql/manifest.json',
-      'transactional-sql/references/data-conventions.md',
-      'transactional-sql/references/naming-conventions.md',
-    ]);
-    expect(entries['transactional-sql/references/data-conventions.md']).toBe('data conv');
-    expect(entries['transactional-sql/references/naming-conventions.md']).toBe('naming conv');
-  });
-
-  it('tolerates a missing README (HTTP 404) on the primary asset', async () => {
-    const manifest: Manifest = {
-      author: 'community',
-      description: 'no readme',
-      entrypoint: 'SKILL.md',
-      name: 'no-readme',
-      type: 'skill',
-      version: '1.0.0',
-    };
-
-    const fetchMock = setupFetchForAssets([
-      { files: { 'SKILL.md': 'body' }, manifest },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { blob } = await downloadAsset(
-      { name: 'no-readme', type: 'skill', version: '1.0.0' },
-      { retry: fastRetry, triggerDownload: vi.fn() },
-    );
-
-    const entries = await readZipEntries(blob);
-    expect(Object.keys(entries).sort()).toEqual(['no-readme/SKILL.md', 'no-readme/manifest.json']);
-  });
-
-  it('places each dependency under dependencies/{name}/ with its own files', async () => {
-    const primary: Manifest = {
-      author: 'EmergentSoftware',
-      dependencies: [{ name: 'dev-commands-rule', type: 'rule', version: '1.2.0' }],
-      description: 'primary',
-      entrypoint: 'AGENT.md',
-      name: 'validate',
-      type: 'agent',
-      version: '1.1.0',
-    };
-    const dep: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'dep',
-      entrypoint: 'RULE.md',
-      name: 'dev-commands-rule',
-      type: 'rule',
-      version: '1.2.0',
-    };
-
-    const fetchMock = setupFetchForAssets([
-      { files: { 'AGENT.md': 'agent', 'README.md': 'primary readme' }, manifest: primary },
-      { files: { 'README.md': 'dep readme', 'RULE.md': 'rule body' }, manifest: dep },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { blob } = await downloadAsset(
-      { name: 'validate', type: 'agent', version: '1.1.0' },
-      { retry: fastRetry, triggerDownload: vi.fn() },
-    );
-
-    const entries = await readZipEntries(blob);
-    expect(Object.keys(entries).sort()).toEqual([
-      'dependencies/dev-commands-rule/README.md',
-      'dependencies/dev-commands-rule/RULE.md',
-      'dependencies/dev-commands-rule/manifest.json',
-      'validate/AGENT.md',
-      'validate/README.md',
-      'validate/manifest.json',
-    ]);
-    expect(entries['dependencies/dev-commands-rule/manifest.json']).toBe(buildManifestBytes(dep));
-    expect(entries['validate/manifest.json']).toBe(buildManifestBytes(primary));
-  });
-
-  it('omits the top-level manifest.json and README.md and uses a .skill extension for format: skill', async () => {
-    const manifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'a skill',
-      entrypoint: 'SKILL.md',
-      files: ['SKILL.md', 'references/data.md'],
-      name: 'my-skill',
-      type: 'skill',
-      version: '2.0.0',
-    };
-
-    const fetchMock = setupFetchForAssets([
-      {
-        files: {
-          'README.md': '# readme',
-          'references/data.md': 'data',
-          'SKILL.md': '# skill',
-        },
-        manifest,
-      },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('requests format=skill and uses the .skill extension', async () => {
+    const { calls } = stubFetch(() => blobResponse(ZIP_BYTES));
     const trigger = vi.fn();
+
     const result = await downloadAsset(
       { name: 'my-skill', type: 'skill', version: '2.0.0' },
-      { format: 'skill', retry: fastRetry, triggerDownload: trigger },
+      { client, format: 'skill', triggerDownload: trigger },
     );
 
     expect(result.filename).toBe('my-skill-2.0.0.skill');
-    const entries = await readZipEntries(result.blob);
-    expect(Object.keys(entries).sort()).toEqual([
-      'my-skill/SKILL.md',
-      'my-skill/references/data.md',
-    ]);
-    expect(entries['my-skill/SKILL.md']).toBe('# skill');
-    expect(entries['my-skill/references/data.md']).toBe('data');
     expect(trigger).toHaveBeenCalledWith(result.blob, 'my-skill-2.0.0.skill');
-  });
-
-  it('strips metadata only from the top-level skill, leaving dependency manifests intact for format: skill', async () => {
-    const primary: Manifest = {
-      author: 'EmergentSoftware',
-      dependencies: [{ name: 'dev-commands-rule', type: 'rule', version: '1.2.0' }],
-      description: 'primary',
-      entrypoint: 'SKILL.md',
-      name: 'my-skill',
-      type: 'skill',
-      version: '1.0.0',
-    };
-    const dep: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'dep',
-      entrypoint: 'RULE.md',
-      name: 'dev-commands-rule',
-      type: 'rule',
-      version: '1.2.0',
-    };
-
-    const fetchMock = setupFetchForAssets([
-      { files: { 'README.md': 'primary readme', 'SKILL.md': 'skill body' }, manifest: primary },
-      { files: { 'README.md': 'dep readme', 'RULE.md': 'rule body' }, manifest: dep },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { blob } = await downloadAsset(
-      { name: 'my-skill', type: 'skill', version: '1.0.0' },
-      { format: 'skill', retry: fastRetry, triggerDownload: vi.fn() },
-    );
-
-    const entries = await readZipEntries(blob);
-    expect(Object.keys(entries).sort()).toEqual([
-      'dependencies/dev-commands-rule/README.md',
-      'dependencies/dev-commands-rule/RULE.md',
-      'dependencies/dev-commands-rule/manifest.json',
-      'my-skill/SKILL.md',
-    ]);
-    expect(entries['dependencies/dev-commands-rule/manifest.json']).toBe(buildManifestBytes(dep));
-  });
-
-  it('deduplicates dependencies encountered via multiple paths and guards against cycles', async () => {
-    const a: Manifest = {
-      author: 'x',
-      dependencies: [{ name: 'b', type: 'skill', version: '1.0.0' }],
-      description: 'a',
-      entrypoint: 'A.md',
-      name: 'a',
-      type: 'skill',
-      version: '1.0.0',
-    };
-    const b: Manifest = {
-      author: 'x',
-      dependencies: [{ name: 'a', type: 'skill', version: '1.0.0' }],
-      description: 'b',
-      entrypoint: 'B.md',
-      name: 'b',
-      type: 'skill',
-      version: '1.0.0',
-    };
-    const fetchMock = setupFetchForAssets([
-      { files: { 'A.md': 'a' }, manifest: a },
-      { files: { 'B.md': 'b' }, manifest: b },
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { blob } = await downloadAsset(
-      { name: 'a', type: 'skill', version: '1.0.0' },
-      { retry: fastRetry, triggerDownload: vi.fn() },
-    );
-
-    const entries = await readZipEntries(blob);
-    // Cycle should resolve: primary a under a/, b under dependencies/b/
-    expect(Object.keys(entries)).toContain('a/A.md');
-    expect(Object.keys(entries)).toContain('dependencies/b/B.md');
-    expect(Object.keys(entries)).toContain('dependencies/b/manifest.json');
-    // a should not recurse into itself as a dep
-    expect(Object.keys(entries)).not.toContain('dependencies/a/A.md');
+    expect(parseUrl(calls[0]!.url)).toEqual({
+      path: '/assets/skill/my-skill/2.0.0/download',
+      query: { format: 'skill' },
+    });
   });
 
   it('retries transient 5xx responses and eventually succeeds', async () => {
-    const manifest: Manifest = {
-      author: 'x',
-      description: 'flaky',
-      entrypoint: 'SKILL.md',
-      name: 'flaky',
-      type: 'skill',
-      version: '1.0.0',
-    };
-
-    const manifestUrl = buildUrl('skill', 'flaky', '1.0.0', 'manifest.json');
-    const skillUrl = buildUrl('skill', 'flaky', '1.0.0', 'SKILL.md');
-    const readmeUrl = buildUrl('skill', 'flaky', '1.0.0', 'README.md');
-
-    let manifestCalls = 0;
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      const key = String(url);
-      if (key === manifestUrl) {
-        manifestCalls += 1;
-        if (manifestCalls === 1) return new Response('', { status: 503 });
-        return okResponse(encodeBase64Text(buildManifestBytes(manifest)));
-      }
-      if (key === skillUrl) return okResponse(encodeBase64Text('body'));
-      if (key === readmeUrl) return new Response('', { status: 404 });
-      return new Response('', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const { calls } = stubFetch((_req, index) =>
+      index === 0 ? textResponse('', 503, 'text/plain') : blobResponse(ZIP_BYTES),
+    );
 
     const { blob } = await downloadAsset(
       { name: 'flaky', type: 'skill', version: '1.0.0' },
-      { retry: fastRetry, triggerDownload: vi.fn() },
+      { client, triggerDownload: vi.fn() },
     );
-    expect(manifestCalls).toBeGreaterThanOrEqual(2);
-    const entries = await readZipEntries(blob);
-    expect(entries['flaky/SKILL.md']).toBe('body');
+
+    expect(calls).toHaveLength(2);
+    expect(await bytesOf(blob)).toEqual(Array.from(ZIP_BYTES));
   });
 
-  it('surfaces a typed error when a required file is missing', async () => {
-    // Manifest fetch succeeds but the entrypoint returns 404 → non-tolerated miss
-    const manifest: Manifest = {
-      author: 'x',
-      description: 'broken',
-      entrypoint: 'SKILL.md',
-      name: 'broken',
-      type: 'skill',
-      version: '1.0.0',
-    };
-    const manifestUrl = buildUrl('skill', 'broken', '1.0.0', 'manifest.json');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      const key = String(url);
-      if (key === manifestUrl) return okResponse(encodeBase64Text(buildManifestBytes(manifest)));
-      return new Response('', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('surfaces RegistryNotFoundError when the asset version is unknown', async () => {
+    stubFetch(() => apiErrorResponse(404, 'not_found', 'Unknown asset version'));
 
     await expect(
-      downloadAsset(
-        { name: 'broken', type: 'skill', version: '1.0.0' },
-        { retry: fastRetry, triggerDownload: vi.fn() },
-      ),
+      downloadAsset({ name: 'broken', type: 'skill', version: '1.0.0' }, { client, triggerDownload: vi.fn() }),
     ).rejects.toBeInstanceOf(RegistryNotFoundError);
   });
 
-  it('surfaces a RegistryFetchError for non-retryable HTTP failures', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 403 }));
-    vi.stubGlobal('fetch', fetchMock);
+  it('surfaces a RegistryFetchError with the status for non-retryable HTTP failures', async () => {
+    stubFetch(() => apiErrorResponse(403, 'not_org_member', 'Not a member'));
+
+    const error = await downloadAsset(
+      { name: 'forbidden', type: 'skill', version: '1.0.0' },
+      { client, triggerDownload: vi.fn() },
+    ).catch((e) => e);
+
+    expect(error).toBeInstanceOf(RegistryFetchError);
+    expect((error as RegistryFetchError).status).toBe(403);
+  });
+
+  it('surfaces a RegistryFetchError when the API is unreachable', async () => {
+    stubFetch(() => {
+      throw new TypeError('offline');
+    });
 
     await expect(
-      downloadAsset(
-        { name: 'forbidden', type: 'skill', version: '1.0.0' },
-        { retry: fastRetry, triggerDownload: vi.fn() },
-      ),
+      downloadAsset({ name: 'offline', type: 'skill', version: '1.0.0' }, { client, triggerDownload: vi.fn() }),
     ).rejects.toBeInstanceOf(RegistryFetchError);
   });
 });
 
-function buildBundleUrl(name: string, version: string, org?: string): string {
-  const parts = ['bundles'];
-  if (org) parts.push(`@${encodeURIComponent(org)}`);
-  parts.push(encodeURIComponent(name), encodeURIComponent(version), 'bundle.json');
-  return `https://api.github.com/repos/EmergentSoftware/agentic-toolkit-registry/contents/${parts.join('/')}`;
-}
-
 describe('downloadBundle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('packages bundle.json at the root and each member under {memberName}/ with flat files', async () => {
-    const bundle: Bundle = {
-      assets: [
-        { name: 'clarification-agent', type: 'agent' },
-        { name: 'validate', org: 'agentic-toolkit', type: 'agent', version: '1.1.0' },
-      ],
-      author: 'EmergentSoftware',
-      description: 'feature workflow',
-      name: 'feature-workflow',
-      setupInstructions: '## setup',
-      tags: ['workflow'],
-      version: '1.0.0',
-    };
-
-    const clarificationManifest: Manifest = {
-      author: 'community',
-      description: 'clarifier',
-      entrypoint: 'AGENT.md',
-      files: ['AGENT.md'],
-      name: 'clarification-agent',
-      type: 'agent',
-      version: '1.0.0',
-    };
-    const validateManifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'validate',
-      entrypoint: 'AGENT.md',
-      files: ['AGENT.md'],
-      name: 'validate',
-      org: 'agentic-toolkit',
-      type: 'agent',
-      version: '1.1.0',
-    };
-
-    const assetFetch = setupFetchForAssets([
-      { files: { 'AGENT.md': 'clarifier body', 'README.md': 'clarifier readme' }, manifest: clarificationManifest },
-      {
-        files: { 'AGENT.md': 'validate body', 'README.md': 'validate readme' },
-        manifest: validateManifest,
-        org: 'agentic-toolkit',
-      },
-    ]);
-
-    const bundleUrl = buildBundleUrl('feature-workflow', '1.0.0');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
-      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('fetches the bundle zip and names it {name}-{version}.zip', async () => {
+    const { calls } = stubFetch(() => blobResponse(ZIP_BYTES));
     const trigger = vi.fn();
-    const result = await downloadBundle('feature-workflow', {
-      resolveVersion: (member) => (member.name === 'clarification-agent' ? '1.0.0' : undefined),
-      retry: fastRetry,
-      triggerDownload: trigger,
-      version: '1.0.0',
-    });
+
+    const result = await downloadBundle('feature-workflow', { client, triggerDownload: trigger, version: '1.0.0' });
 
     expect(result.filename).toBe('feature-workflow-1.0.0.zip');
-    const entries = await readZipEntries(result.blob);
-    const keys = Object.keys(entries).sort();
-    expect(keys).toContain('bundle.json');
-    expect(keys).toContain('clarification-agent/AGENT.md');
-    expect(keys).toContain('clarification-agent/README.md');
-    expect(keys).toContain('clarification-agent/manifest.json');
-    expect(keys).toContain('validate/AGENT.md');
-    expect(keys).toContain('validate/manifest.json');
-    expect(entries['bundle.json']).toContain('"feature-workflow"');
+    expect(await bytesOf(result.blob)).toEqual(Array.from(ZIP_BYTES));
     expect(trigger).toHaveBeenCalledWith(result.blob, 'feature-workflow-1.0.0.zip');
+    expect(parseUrl(calls[0]!.url)).toEqual({
+      path: '/bundles/feature-workflow/1.0.0/download',
+      query: { format: 'zip' },
+    });
   });
 
-  it('format: skill nests skill members as .skill files, strips non-skill metadata, and drops bundle.json', async () => {
-    const bundle: Bundle = {
-      assets: [
-        { name: 'code-reviewer', type: 'skill', version: '2.0.0' },
-        { name: 'validate', type: 'agent', version: '1.1.0' },
-      ],
-      author: 'EmergentSoftware',
-      description: 'review workflow',
-      name: 'review-workflow',
-      version: '1.0.0',
-    };
-
-    const skillManifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'reviewer',
-      entrypoint: 'SKILL.md',
-      files: ['SKILL.md'],
-      name: 'code-reviewer',
-      type: 'skill',
-      version: '2.0.0',
-    };
-    const agentManifest: Manifest = {
-      author: 'EmergentSoftware',
-      description: 'validate',
-      entrypoint: 'AGENT.md',
-      files: ['AGENT.md'],
-      name: 'validate',
-      type: 'agent',
-      version: '1.1.0',
-    };
-
-    const assetFetch = setupFetchForAssets([
-      { files: { 'README.md': 'skill readme', 'SKILL.md': 'skill body' }, manifest: skillManifest },
-      { files: { 'AGENT.md': 'agent body', 'README.md': 'agent readme' }, manifest: agentManifest },
-    ]);
-    const bundleUrl = buildBundleUrl('review-workflow', '1.0.0');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
-      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('keeps the .zip extension for the skill variant and requests format=skill', async () => {
+    const { calls } = stubFetch(() => blobResponse(ZIP_BYTES));
 
     const result = await downloadBundle('review-workflow', {
+      client,
       format: 'skill',
-      retry: fastRetry,
       triggerDownload: vi.fn(),
       version: '1.0.0',
     });
 
-    // Outer archive keeps the .zip extension even for the .skill variant.
     expect(result.filename).toBe('review-workflow-1.0.0.zip');
-
-    const outer = await JSZip.loadAsync(await result.blob.arrayBuffer());
-    const outerKeys = Object.keys(outer.files).filter((k) => !outer.files[k].dir);
-
-    // bundle.json is dropped.
-    expect(outerKeys).not.toContain('bundle.json');
-
-    // The skill member is a nested .skill file…
-    expect(outerKeys).toContain('code-reviewer.skill');
-    const nestedBytes = await outer.file('code-reviewer.skill')!.async('uint8array');
-    const nested = await JSZip.loadAsync(nestedBytes);
-    const nestedKeys = Object.keys(nested.files).filter((k) => !nested.files[k].dir);
-    // …and is itself a metadata-stripped skill archive.
-    expect(nestedKeys).toContain('code-reviewer/SKILL.md');
-    expect(nestedKeys).not.toContain('code-reviewer/manifest.json');
-    expect(nestedKeys).not.toContain('code-reviewer/README.md');
-
-    // The non-skill member stays a folder but with its metadata stripped.
-    expect(outerKeys).toContain('validate/AGENT.md');
-    expect(outerKeys).not.toContain('validate/manifest.json');
-    expect(outerKeys).not.toContain('validate/README.md');
+    expect(parseUrl(calls[0]!.url).query).toEqual({ format: 'skill' });
   });
 
-  it('falls back to resolveVersion when a member omits its version', async () => {
-    const bundle: Bundle = {
-      assets: [{ name: 'clarification-agent', type: 'agent' }],
-      author: 'x',
-      description: 'b',
-      name: 'tiny',
-      version: '0.1.0',
-    };
-    const manifest: Manifest = {
-      author: 'x',
-      description: 'c',
-      entrypoint: 'AGENT.md',
-      name: 'clarification-agent',
-      type: 'agent',
-      version: '2.3.4',
-    };
-
-    const assetFetch = setupFetchForAssets([{ files: { 'AGENT.md': 'body' }, manifest }]);
-    const bundleUrl = buildBundleUrl('tiny', '0.1.0');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
-      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const resolveVersion = vi.fn(() => '2.3.4');
-    const { blob } = await downloadBundle('tiny', {
-      resolveVersion,
-      retry: fastRetry,
-      triggerDownload: vi.fn(),
-      version: '0.1.0',
-    });
-
-    expect(resolveVersion).toHaveBeenCalledTimes(1);
-    const entries = await readZipEntries(blob);
-    expect(Object.keys(entries)).toContain('clarification-agent/manifest.json');
-  });
-
-  it('throws when a member has no version and the resolver returns undefined', async () => {
-    const bundle: Bundle = {
-      assets: [{ name: 'unknown', type: 'agent' }],
-      author: 'x',
-      description: 'b',
-      name: 'broken',
-      version: '0.1.0',
-    };
-    const bundleUrl = buildBundleUrl('broken', '0.1.0');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
-      return new Response('', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      downloadBundle('broken', { retry: fastRetry, triggerDownload: vi.fn(), version: '0.1.0' }),
-    ).rejects.toThrow(/missing a version/);
-  });
-
-  it('surfaces RegistryNotFoundError when the bundle manifest itself is missing', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 404 }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      downloadBundle('missing-bundle', { retry: fastRetry, triggerDownload: vi.fn(), version: '1.0.0' }),
-    ).rejects.toBeInstanceOf(RegistryNotFoundError);
-  });
-
-  it('fetches an org-scoped bundle manifest from its @org path (W1)', async () => {
-    const bundle: Bundle = {
-      assets: [{ name: 'clarification-agent', type: 'agent', version: '1.0.0' }],
-      author: 'cupay',
-      description: 'qa bundle',
-      name: 'qa-bundle',
-      org: 'cupay',
-      version: '1.0.0',
-    };
-    const manifest: Manifest = {
-      author: 'community',
-      description: 'clarifier',
-      entrypoint: 'AGENT.md',
-      files: ['AGENT.md'],
-      name: 'clarification-agent',
-      type: 'agent',
-      version: '1.0.0',
-    };
-
-    const assetFetch = setupFetchForAssets([{ files: { 'AGENT.md': 'body' }, manifest }]);
-    const bundleUrl = buildBundleUrl('qa-bundle', '1.0.0', 'cupay');
-    const seen: string[] = [];
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      seen.push(String(url));
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle, null, 2)));
-      return (assetFetch as unknown as (u: RequestInfo | URL) => Promise<Response>)(url);
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('passes the org as a query parameter for an org-scoped bundle (W1)', async () => {
+    const { calls } = stubFetch(() => blobResponse(ZIP_BYTES));
 
     const { filename } = await downloadBundle('qa-bundle', {
+      client,
       org: 'cupay',
-      retry: fastRetry,
       triggerDownload: vi.fn(),
       version: '1.0.0',
     });
 
     expect(filename).toBe('qa-bundle-1.0.0.zip');
-    expect(seen).toContain(bundleUrl);
+    expect(parseUrl(calls[0]!.url)).toEqual({
+      path: '/bundles/qa-bundle/1.0.0/download',
+      query: { format: 'zip', org: 'cupay' },
+    });
   });
 
-  it('reports an org-scoped member that resolves to no asset as not-found-in-org (W4)', async () => {
-    const bundle: Bundle = {
-      assets: [{ name: 'login-helper', org: 'cupay', type: 'skill' }],
-      author: 'cupay',
-      description: 'b',
-      name: 'qa-bundle',
-      org: 'cupay',
-      version: '1.0.0',
-    };
-    const bundleUrl = buildBundleUrl('qa-bundle', '1.0.0', 'cupay');
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url) === bundleUrl) return okResponse(encodeBase64Text(JSON.stringify(bundle)));
-      return new Response('', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('surfaces RegistryNotFoundError when the bundle is missing', async () => {
+    stubFetch(() => apiErrorResponse(404, 'not_found', 'Unknown bundle'));
 
     await expect(
-      downloadBundle('qa-bundle', {
-        org: 'cupay',
-        // Resolver finds no matching asset in scope → undefined version.
-        resolveVersion: () => undefined,
-        retry: fastRetry,
-        triggerDownload: vi.fn(),
-        version: '1.0.0',
-      }),
-    ).rejects.toThrow(/not found in org 'cupay'/);
+      downloadBundle('missing-bundle', { client, triggerDownload: vi.fn(), version: '1.0.0' }),
+    ).rejects.toBeInstanceOf(RegistryNotFoundError);
+  });
+
+  it('surfaces the API message for a member that cannot be resolved (W4)', async () => {
+    stubFetch(() => apiErrorResponse(404, 'not_found', "Bundle member 'login-helper' not found in org 'cupay'"));
+
+    await expect(
+      downloadBundle('qa-bundle', { client, org: 'cupay', triggerDownload: vi.fn(), version: '1.0.0' }),
+    ).rejects.toThrow(/not found/);
   });
 });

@@ -5,6 +5,6 @@ interface ImportMeta {
 }
 
 interface ImportMetaEnv {
-  readonly VITE_AUTH_FUNCTION_URL?: string;
+  readonly VITE_ATK_API_URL?: string;
   readonly VITE_GITHUB_OAUTH_CLIENT_ID?: string;
 }

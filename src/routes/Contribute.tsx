@@ -7,6 +7,7 @@ import { useWideLayout } from '@/components/layout/LayoutWidthContext';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { PageHeader } from '@/components/PageHeader';
+import { PublishIssuesPanel } from '@/components/PublishIssuesPanel';
 import { SectionHeader } from '@/components/SectionHeader';
 import { Stepper, type StepperStep } from '@/components/Stepper';
 import { ConfirmDialog } from '@/components/ui/alert-dialog';
@@ -18,15 +19,10 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/hooks/useToast';
-import {
-  basename,
-  type FileEntry,
-  fileToFileEntry,
-  isBinaryEntry,
-  stripCommonRoot,
-} from '@/lib/file-entry';
+import { type ApiErrorDetail } from '@/lib/api-client';
+import { basename, type FileEntry, fileToFileEntry, isBinaryEntry, stripCommonRoot } from '@/lib/file-entry';
 import { parseFrontmatter } from '@/lib/frontmatter';
-import { PublishError } from '@/lib/publish-errors';
+import { PublishError, PublishValidationError } from '@/lib/publish-errors';
 import { publishContribution, type PublishProgressEvent } from '@/lib/publish-service';
 import { fetchRegistry, findExistingAsset } from '@/lib/registry-client';
 import { AssetType, type Manifest, ManifestSchema } from '@/lib/schemas/manifest';
@@ -96,7 +92,11 @@ const PersistedDraftSchema = z.object({
   name: z.string(),
   org: z.string(),
   readme: z.string(),
-  step: z.number().int().min(0).max(STEPS.length - 1),
+  step: z
+    .number()
+    .int()
+    .min(0)
+    .max(STEPS.length - 1),
   tags: z.array(z.string()),
   type: z.union([z.literal(''), AssetType]),
   version: z.string(),
@@ -109,6 +109,8 @@ interface StepProps {
 
 interface StepReviewProps {
   draft: DraftState;
+  /** Problems reported by the registry API on the last submit attempt. */
+  publishIssues: ApiErrorDetail[];
   validation: z.ZodSafeParseResult<Manifest>;
 }
 
@@ -152,10 +154,7 @@ export function clearDraftFromStorage(): void {
   window.sessionStorage.removeItem(DRAFT_STORAGE_KEY);
 }
 
-export function computeVersionConflict(
-  draft: DraftState,
-  registry: null | Registry,
-): VersionConflictState {
+export function computeVersionConflict(draft: DraftState, registry: null | Registry): VersionConflictState {
   if (!registry) return { status: 'none' };
   if (!draft.name || !draft.type || !isValidSemver(draft.version)) {
     return { status: 'none' };
@@ -174,7 +173,7 @@ export function computeVersionConflict(
 
 export function ContributeRoute() {
   useWideLayout();
-  const { octokit, user } = useSession();
+  const { api, user } = useSession();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -182,6 +181,7 @@ export function ContributeRoute() {
   const [draft, setDraft] = useState<DraftState>(() => createInitialDraft(defaultAuthor));
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
+  const [publishIssues, setPublishIssues] = useState<ApiErrorDetail[]>([]);
   const [registry, setRegistry] = useState<null | Registry>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const hydratedRef = useRef(false);
@@ -218,11 +218,11 @@ export function ContributeRoute() {
   useEffect(() => {
     if (draft.step !== 2) return;
     if (registry) return;
-    if (!octokit) return;
+    if (!api) return;
     if (registryFetchStartedRef.current) return;
     registryFetchStartedRef.current = true;
     let cancelled = false;
-    fetchRegistry({ octokit })
+    fetchRegistry({ client: api })
       .then((r) => {
         if (!cancelled) setRegistry(r);
       })
@@ -232,7 +232,7 @@ export function ContributeRoute() {
     return () => {
       cancelled = true;
     };
-  }, [draft.step, registry, octokit]);
+  }, [draft.step, registry, api]);
 
   useEffect(() => {
     setDraft((prev) => {
@@ -274,7 +274,7 @@ export function ContributeRoute() {
     const result = validateDraft(draft);
     if (!result.success) return;
     if (submitting) return;
-    if (!octokit || !user) {
+    if (!api || !user) {
       toast.add({
         description: 'You need to be signed in to submit a contribution.',
         priority: 'high',
@@ -284,14 +284,15 @@ export function ContributeRoute() {
     }
 
     setSubmitting(true);
-    setProgress({ message: 'Preparing your workspace', step: 'preparing-workspace' });
+    setPublishIssues([]);
+    setProgress({ message: 'Preparing your contribution', step: 'preparing-workspace' });
 
     try {
       const publishResult = await publishContribution({
+        client: api,
         dryRun,
         files: draft.files.map((f) => ({ content: f.content, encoding: f.encoding, path: f.path })),
         manifest: result.data,
-        octokit,
         onProgress: (event) => setProgress(event),
         readme: draft.readme,
       });
@@ -304,9 +305,11 @@ export function ContributeRoute() {
           branchName: publishResult.branchName,
           dryRun: publishResult.dryRun,
           prUrl: publishResult.prUrl,
+          warnings: publishResult.warnings,
         },
       });
     } catch (error) {
+      if (error instanceof PublishValidationError) setPublishIssues(error.details);
       const message =
         error instanceof PublishError
           ? error.userMessage
@@ -342,7 +345,7 @@ export function ContributeRoute() {
         {draft.step === 1 && <StepFiles draft={draft} onChange={update} />}
         {draft.step === 2 && <StepMetadata draft={draft} onChange={update} />}
         {draft.step === 3 && <StepReadme draft={draft} onChange={update} />}
-        {draft.step === 4 && <StepReview draft={draft} validation={validation} />}
+        {draft.step === 4 && <StepReview draft={draft} publishIssues={publishIssues} validation={validation} />}
         {submitting && progress ? (
           <div
             aria-live='polite'
@@ -448,9 +451,7 @@ function describeType(type: AssetType): string {
 }
 
 function extractManifest(files: FileEntry[]): Partial<DraftState> | undefined {
-  const manifestFile = files.find(
-    (f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'manifest.json',
-  );
+  const manifestFile = files.find((f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'manifest.json');
   if (!manifestFile) return undefined;
   try {
     const parsed = JSON.parse(manifestFile.content) as Record<string, unknown>;
@@ -473,9 +474,7 @@ function extractManifest(files: FileEntry[]): Partial<DraftState> | undefined {
 }
 
 function extractReadme(files: FileEntry[]): string | undefined {
-  const readme = files.find(
-    (f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'readme.md',
-  );
+  const readme = files.find((f) => !isBinaryEntry(f) && basename(f.path).toLowerCase() === 'readme.md');
   return readme?.content;
 }
 
@@ -545,8 +544,7 @@ async function readDropEntries(dataTransfer: DataTransfer): Promise<FileEntry[]>
 async function readFileList(fileList: FileList): Promise<FileEntry[]> {
   const entries: FileEntry[] = [];
   for (const file of Array.from(fileList)) {
-    const path =
-      (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     entries.push(await fileToFileEntry(file, path));
   }
   return stripCommonRoot(entries);
@@ -809,7 +807,11 @@ function StepMetadata({ draft, onChange }: StepProps) {
     setTagDraft('');
   };
 
-  const removeTag = (tag: string) => onChange('tags', draft.tags.filter((t) => t !== tag));
+  const removeTag = (tag: string) =>
+    onChange(
+      'tags',
+      draft.tags.filter((t) => t !== tag),
+    );
 
   return (
     <Card>
@@ -1001,7 +1003,7 @@ function StepReadme({ draft, onChange }: StepProps) {
   );
 }
 
-function StepReview({ draft, validation }: StepReviewProps) {
+function StepReview({ draft, publishIssues, validation }: StepReviewProps) {
   const manifestInput = buildManifestInput(draft);
   return (
     <Card>
@@ -1049,6 +1051,7 @@ function StepReview({ draft, validation }: StepReviewProps) {
             </ul>
           )}
         </div>
+        <PublishIssuesPanel issues={publishIssues} subject='contribution' />
         <div aria-live='polite' role='status'>
           {validation.success ? (
             <p className='text-sm text-foreground' data-testid='review-valid'>
@@ -1157,35 +1160,17 @@ function VersionConflictPanel({
       </p>
       <div className='flex flex-wrap gap-2'>
         {patchPreview ? (
-          <Button
-            data-testid='bump-patch'
-            onClick={() => onBump('patch')}
-            size='sm'
-            type='button'
-            variant='outline'
-          >
+          <Button data-testid='bump-patch' onClick={() => onBump('patch')} size='sm' type='button' variant='outline'>
             Patch → v{patchPreview}
           </Button>
         ) : null}
         {minorPreview ? (
-          <Button
-            data-testid='bump-minor'
-            onClick={() => onBump('minor')}
-            size='sm'
-            type='button'
-            variant='outline'
-          >
+          <Button data-testid='bump-minor' onClick={() => onBump('minor')} size='sm' type='button' variant='outline'>
             Minor → v{minorPreview}
           </Button>
         ) : null}
         {majorPreview ? (
-          <Button
-            data-testid='bump-major'
-            onClick={() => onBump('major')}
-            size='sm'
-            type='button'
-            variant='outline'
-          >
+          <Button data-testid='bump-major' onClick={() => onBump('major')} size='sm' type='button' variant='outline'>
             Major → v{majorPreview}
           </Button>
         ) : null}
@@ -1206,9 +1191,7 @@ async function walkFsEntry(entry: FileSystemEntry): Promise<FileEntry[]> {
   const collected: FileEntry[] = [];
   // readEntries returns batches; loop until the reader signals completion with an empty batch.
   for (;;) {
-    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
-      reader.readEntries(resolve, reject),
-    );
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
     if (batch.length === 0) break;
     for (const child of batch) {
       const childEntries = await walkFsEntry(child);
@@ -1264,4 +1247,3 @@ function WizardNav({
     </div>
   );
 }
-

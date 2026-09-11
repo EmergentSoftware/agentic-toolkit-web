@@ -4,23 +4,18 @@ import type { Bundle } from '@/lib/schemas';
 
 import { useSession } from '@/hooks/useSession';
 import { queryKeys } from '@/lib/query-keys';
-import { type BundleManifestRef, fetchBundleManifest, type RegistryClientOptions } from '@/lib/registry-client';
-
-type BundleManifestHookOptions = Omit<RegistryClientOptions, 'octokit' | 'signal'>;
+import { type BundleManifestRef, fetchBundleManifest } from '@/lib/registry-client';
 
 /** Fetch and cache a bundle's bundle.json. Requires an authenticated session. */
-export function useBundleManifest(
-  ref: Partial<BundleManifestRef>,
-  options?: BundleManifestHookOptions,
-): UseQueryResult<Bundle, Error> {
-  const { octokit } = useSession();
-  const enabled = Boolean(octokit && ref.name && ref.version);
+export function useBundleManifest(ref: Partial<BundleManifestRef>): UseQueryResult<Bundle, Error> {
+  const { api } = useSession();
+  const enabled = Boolean(api && ref.name && ref.version);
 
   return useQuery({
     enabled,
     queryFn: ({ signal }) => {
-      if (!octokit) throw new Error('useBundleManifest: no authenticated Octokit client available');
-      return fetchBundleManifest(ref as BundleManifestRef, { ...options, octokit, signal });
+      if (!api) throw new Error('useBundleManifest: no authenticated API client available');
+      return fetchBundleManifest(ref as BundleManifestRef, { client: api, signal });
     },
     queryKey: queryKeys.bundleManifest({ name: ref.name ?? '', org: ref.org, version: ref.version }),
   });
