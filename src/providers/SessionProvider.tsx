@@ -31,7 +31,6 @@ export interface SessionContextValue {
 }
 
 export interface SessionUser {
-  avatarUrl: null | string;
   login: string;
   name: null | string;
 }
@@ -58,7 +57,6 @@ export function SessionProvider({ children }: SessionProviderProps) {
       if (!api) throw new Error('API client not initialized');
       const principal = unwrap(await me({ client: api, signal }), 'your GitHub account');
       return {
-        avatarUrl: principal.avatarUrl ?? null,
         login: principal.login,
         name: principal.name ?? null,
       };

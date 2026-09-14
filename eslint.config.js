@@ -29,6 +29,17 @@ export default tseslint.config(
 			],
 			'react-hooks/rules-of-hooks': 'error',
 			'react-hooks/exhaustive-deps': 'warn',
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['**/api/client.gen', '**/api/client.gen.ts'],
+							message: 'Use createApiClient from src/lib/api-client.ts; the generated default client has no base URL or auth.',
+						},
+					],
+				},
+			],
 		},
 	},
 	{

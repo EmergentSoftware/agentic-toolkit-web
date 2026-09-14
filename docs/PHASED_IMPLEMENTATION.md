@@ -1,5 +1,7 @@
 # Agentic Toolkit Web — Phased Implementation Plan
 
+> **Historical.** This was the MVP build plan. It is kept for the record and is not maintained. Where it disagrees with the code, the code wins; in particular the in-repo `auth-function` and the Octokit data layer it describes were replaced by the shared ATK API in September 2026 (web PR #2). `PROJECT_OVERVIEW.md` describes the current architecture.
+
 This document breaks the ATK Web MVP into ordered phases. Each phase delivers a testable slice of functionality and must be validated before the next phase begins. The ordering deliberately front-loads foundational, auth-free work so early phases can be developed and tested against fixture data, then layers authentication and contribution workflows on top once the read-only surface is stable.
 
 Resolved decisions informing this plan (from PROJECT_OVERVIEW.md §10):

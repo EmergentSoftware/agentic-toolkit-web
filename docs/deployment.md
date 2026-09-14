@@ -10,7 +10,7 @@ The SPA deploys automatically on pushes to `main`. There is only one SPA environ
 Related docs:
 
 - `docs/OAUTH_APP_SETUP.md` — full step-by-step OAuth App registration playbook (dev and prod).
-- `docs/PHASED_IMPLEMENTATION.md` — project-wide implementation phases.
+- `docs/PHASED_IMPLEMENTATION.md` — the original MVP build plan (historical, not maintained).
 - `docs/Direction.md` and `docs/design/ClientContract.md` in the `Emergent.AgenticToolkit` monorepo — the API's contract and roadmap.
 
 ---

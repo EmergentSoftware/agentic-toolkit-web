@@ -115,7 +115,7 @@ function renderContribute(login = 'test-user', options: { api?: ApiClient | null
   const session = makeSessionValue({
     api: options.api ?? null,
     status: 'member',
-    user: { avatarUrl: null, login, name: null },
+    user: { login, name: null },
   });
   return render(
     <MemoryRouter initialEntries={options.initialEntries ?? ['/contribute']}>

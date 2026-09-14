@@ -9,7 +9,8 @@
  *   with a stable `code`, an HTTP `status`, and a message the UI can show.
  *
  * Nothing outside this module may import the generated default client in
- * `api/client.gen.ts`; it points at production and carries no auth.
+ * `api/client.gen.ts`; it is generated without a base URL or auth, and an
+ * ESLint `no-restricted-imports` rule enforces this.
  */
 
 import type { ApiErrorDetail } from './api/types.gen';
