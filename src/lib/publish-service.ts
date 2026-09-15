@@ -66,9 +66,11 @@ export const DRY_RUN_PR_URL_MARKER = 'https://dry-run.local/atk/contribute/previ
 
 /**
  * Publish a prepared contribution through the ATK API, which validates the
- * payload and opens a pull request against the registry with the signed-in
- * user's own token (so the PR is authored by them). This mirrors the CLI's
- * `atk publish` flow.
+ * payload and opens a pull request against the registry: with the signed-in
+ * user's own token for a GitHub session (so the PR is authored by them), or
+ * with the API's publish identity for an Entra session (the commit is authored
+ * as the user and the PR body names them). This mirrors the CLI's `atk publish`
+ * flow.
  *
  * When `dryRun` is true the payload is sent to `POST /publish/plan` instead:
  * the API validates it and returns the plan without touching GitHub, and the

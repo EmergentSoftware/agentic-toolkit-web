@@ -31,7 +31,7 @@ export class PublishPermissionError extends PublishError {
   constructor(params: { cause?: unknown; detail?: string }) {
     super(
       `Insufficient permissions to publish: ${params.detail ?? 'unknown'}`,
-      'Your GitHub session does not allow publishing. Sign out and sign back in, making sure you are an active member of the EmergentSoftware organization.',
+      'Your session does not allow publishing. Sign out and sign back in with your Emergent account, or with a GitHub account that is an active member of the EmergentSoftware organization.',
       { cause: params.cause },
     );
     this.name = 'PublishPermissionError';

@@ -45,12 +45,12 @@ describe('RequireAuth', () => {
   afterEach(() => window.sessionStorage.clear());
 
   it('renders children when the session status is "member"', () => {
-    renderAt('/protected', makeSessionValue({ status: 'member', token: 'tok' }));
+    renderAt('/protected', makeSessionValue({ status: 'member' }));
     expect(screen.getByTestId('protected-child')).toBeInTheDocument();
   });
 
   it('shows a loading screen while verifying', () => {
-    renderAt('/protected', makeSessionValue({ status: 'verifying', token: 'tok' }));
+    renderAt('/protected', makeSessionValue({ status: 'verifying' }));
     expect(screen.getByTestId('require-auth-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('protected-child')).not.toBeInTheDocument();
   });
@@ -67,7 +67,7 @@ describe('RequireAuth', () => {
   });
 
   it('redirects non-members to /not-authorized', () => {
-    renderAt('/protected', makeSessionValue({ status: 'non-member', token: 'tok' }));
+    renderAt('/protected', makeSessionValue({ status: 'non-member' }));
     expect(screen.getByTestId('not-authorized')).toBeInTheDocument();
     expect(screen.queryByTestId('protected-child')).not.toBeInTheDocument();
   });

@@ -27,6 +27,7 @@ import { publishContribution, type PublishProgressEvent } from '@/lib/publish-se
 import { fetchRegistry, findExistingAsset } from '@/lib/registry-client';
 import { AssetType, type Manifest, ManifestSchema } from '@/lib/schemas/manifest';
 import { type Registry } from '@/lib/schemas/registry';
+import { defaultAuthorFor } from '@/lib/session';
 import { extractSkillArchive, hasSkillExtension } from '@/lib/skill-archive';
 import { type BumpType, bumpVersion } from '@/lib/version-utils';
 
@@ -173,11 +174,11 @@ export function computeVersionConflict(draft: DraftState, registry: null | Regis
 
 export function ContributeRoute() {
   useWideLayout();
-  const { api, user } = useSession();
+  const { api, scheme, user } = useSession();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const defaultAuthor = user?.login ?? '';
+  const defaultAuthor = defaultAuthorFor(scheme, user);
   const [draft, setDraft] = useState<DraftState>(() => createInitialDraft(defaultAuthor));
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<null | PublishProgressEvent>(null);
@@ -913,7 +914,7 @@ function StepMetadata({ draft, onChange }: StepProps) {
               placeholder='GitHub login'
               value={draft.author}
             />
-            <p className='text-xs text-muted-foreground'>Pre-filled from your GitHub session; edit if needed.</p>
+            <p className='text-xs text-muted-foreground'>Pre-filled from your sign-in; edit if needed.</p>
           </div>
         </div>
         <div className='space-y-1.5'>

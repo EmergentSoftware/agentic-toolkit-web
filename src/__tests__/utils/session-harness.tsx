@@ -15,10 +15,12 @@ export function makeSessionValue(overrides: Partial<SessionContextValue> = {}): 
   return {
     api: null,
     completeSignIn: () => {},
+    dismissNotice: () => {},
+    notice: null,
+    scheme: null,
     signIn: () => {},
     signOut: () => {},
     status: 'signed-out',
-    token: null,
     user: null,
     ...overrides,
   };

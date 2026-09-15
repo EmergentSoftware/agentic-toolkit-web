@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { getRegistry, me } from '@/lib/api';
-import { ApiRequestError, createApiClient, getApiUrl, isApiError, unwrap } from '@/lib/api-client';
+import {
+  ApiRequestError,
+  createApiClient,
+  getApiUrl,
+  isApiError,
+  NOT_MEMBER_CODES,
+  SESSION_EXPIRED_CODE,
+  sessionExpiredError,
+  unwrap,
+} from '@/lib/api-client';
 
 import { apiErrorResponse, jsonResponse, makeTestApiClient, stubFetch, textResponse } from '../utils/api-stub';
 
@@ -35,12 +44,44 @@ describe('createApiClient', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer gho_abc');
   });
 
-  it('omits the Authorization header when built without a token', async () => {
+  it('omits the Authorization header when built without a credential', async () => {
     const { calls } = stubFetch(() => jsonResponse({}));
 
     await getRegistry({ client: createApiClient(null, { retry: { maxRetries: 0 } }) });
 
     expect(calls[0]!.headers.get('authorization')).toBeNull();
+  });
+
+  it('asks an Entra credential for a token on every request', async () => {
+    const { calls } = stubFetch(() => jsonResponse({ login: 'jasonp@emergentsoftware.net', scheme: 'entra' }));
+    const getToken = vi.fn(async () => `eyJ.token.${getToken.mock.calls.length}`);
+    const client = createApiClient({ getToken, scheme: 'entra' }, { retry: { maxRetries: 0 } });
+
+    await me({ client });
+    await me({ client });
+
+    expect(getToken).toHaveBeenCalledTimes(2);
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer eyJ.token.1');
+    expect(calls[1]!.headers.get('authorization')).toBe('Bearer eyJ.token.2');
+  });
+
+  it('surfaces a throwing Entra token getter as the 401 it carries, without sending the request', async () => {
+    const { calls } = stubFetch(() => jsonResponse({}));
+    const client = createApiClient({ getToken: async () => Promise.reject(sessionExpiredError()), scheme: 'entra' });
+
+    const result = await me({ client });
+
+    expect(calls).toHaveLength(0);
+    expect(result.response).toBeUndefined();
+    const err = catchError(() => unwrap(result, 'your account'));
+    expect(isApiError(err, SESSION_EXPIRED_CODE, 401)).toBe(true);
+    expect(err.message).toBe('Your Emergent sign-in has expired. Sign in again.');
+  });
+
+  it('counts guest_not_allowed as a not-member code', () => {
+    expect(NOT_MEMBER_CODES.has('guest_not_allowed')).toBe(true);
+    expect(NOT_MEMBER_CODES.has('not_org_member')).toBe(true);
+    expect(NOT_MEMBER_CODES.has('org_membership_unverifiable')).toBe(true);
   });
 
   it('retries transient failures through fetchWithRetry', async () => {
@@ -102,14 +143,30 @@ describe('unwrap', () => {
     const at = (status: number, error?: unknown) =>
       catchError(() => unwrap({ error: error ?? {}, response: new Response(null, { status }) }, 'the registry index'));
 
-    expect(at(401).message).toMatch(/sign in again/i);
+    expect(at(401).message).toBe('Your session is no longer valid. Sign in again.');
+    expect(at(401, { error: 'invalid_token', message: 'Bad credentials' }).message).not.toMatch(/GitHub/);
     expect(at(403, { error: 'not_org_member', message: 'nope' }).message).toMatch(/EmergentSoftware/);
     expect(at(403, { error: 'not_org_member', message: 'nope' }).code).toBe('not_org_member');
+    expect(at(403, { error: 'guest_not_allowed', message: 'nope' }).message).toMatch(/guests/i);
+    expect(at(403, { error: 'guest_not_allowed', message: 'nope' }).code).toBe('guest_not_allowed');
     expect(at(404).message).toMatch(/was not found/i);
     expect(at(429).message).toMatch(/rate limiting/i);
     expect(at(503, { error: 'upstream_unavailable', message: 'GitHub timed out' }).message).toMatch(
       /unavailable.*HTTP 503.*GitHub timed out/i,
     );
+  });
+
+  it('keeps the API message verbatim for 401 github_auth_retired', () => {
+    const message =
+      'GitHub sign-in to ATK ended on 2026-09-14. Run `atk login`, or sign in with your Emergent account.';
+    const err = catchError(() =>
+      unwrap(
+        { error: { error: 'github_auth_retired', message }, response: new Response(null, { status: 401 }) },
+        'your account',
+      ),
+    );
+    expect(isApiError(err, 'github_auth_retired', 401)).toBe(true);
+    expect(err.message).toBe(message);
   });
 
   it('falls back to http_error with the raw body when there is no envelope', () => {

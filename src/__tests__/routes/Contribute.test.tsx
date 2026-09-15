@@ -1,10 +1,11 @@
 import { Toast } from '@base-ui-components/react/toast';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import JSZip from 'jszip';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApiClient } from '@/lib/api-client';
+import type { SessionContextValue } from '@/providers/SessionProvider';
 
 import { Toaster } from '@/components/Toaster';
 import * as publishServiceModule from '@/lib/publish-service';
@@ -111,11 +112,16 @@ async function makeSkillFile(name: string, entries: Record<string, string | Uint
   return new File([blob], name, { type: 'application/zip' });
 }
 
-function renderContribute(login = 'test-user', options: { api?: ApiClient | null; initialEntries?: string[] } = {}) {
+function renderContribute(
+  login = 'test-user',
+  options: { api?: ApiClient | null; initialEntries?: string[]; session?: Partial<SessionContextValue> } = {},
+) {
   const session = makeSessionValue({
     api: options.api ?? null,
+    scheme: 'github',
     status: 'member',
-    user: { login, name: null },
+    user: { id: '1', login, name: null, scheme: 'github' },
+    ...options.session,
   });
   return render(
     <MemoryRouter initialEntries={options.initialEntries ?? ['/contribute']}>
@@ -294,6 +300,23 @@ describe('Contribute — wizard UI', () => {
     // instead, just check draft-level persistence reflects the prefilled author.
     const persisted = window.sessionStorage.getItem(DRAFT_STORAGE_KEY);
     expect(persisted).toContain('"author":"octo-login"');
+  });
+
+  it('prefills the author field from the display name for an Entra session, falling back to the UPN', () => {
+    renderContribute('jasonp@emergentsoftware.net', {
+      session: {
+        scheme: 'entra',
+        user: { id: 'oid', login: 'jasonp@emergentsoftware.net', name: 'Jason Paff', scheme: 'entra' },
+      },
+    });
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"author":"Jason Paff"');
+    cleanup();
+    window.sessionStorage.clear();
+
+    renderContribute('jasonp@emergentsoftware.net', {
+      session: { scheme: 'entra', user: { id: 'oid', login: 'jasonp@emergentsoftware.net', scheme: 'entra' } },
+    });
+    expect(window.sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"author":"jasonp@emergentsoftware.net"');
   });
 
   it('persists draft changes to sessionStorage and hydrates on mount', () => {

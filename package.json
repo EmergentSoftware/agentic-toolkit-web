@@ -33,6 +33,7 @@
     "generate-api": "openapi-ts"
   },
   "dependencies": {
+    "@azure/msal-browser": "5.21.0",
     "@base-ui-components/react": "^1.0.0-beta.0",
     "@tanstack/react-form": "^1.29.0",
     "@tanstack/react-query": "^5.59.0",

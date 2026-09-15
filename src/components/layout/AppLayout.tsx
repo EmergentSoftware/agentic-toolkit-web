@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 
 import { Header } from './Header';
 import { LayoutWidthProvider, useLayoutWidth } from './LayoutWidthContext';
+import { SunsetBanner } from './SunsetBanner';
 
 export function AppLayout() {
   return (
@@ -19,6 +20,7 @@ function AppLayoutInner() {
   return (
     <div className='flex min-h-full flex-col bg-background text-foreground' data-testid='app-layout'>
       <Header />
+      <SunsetBanner />
       <main
         className={cn(
           'flex w-full flex-1 flex-col py-8',
