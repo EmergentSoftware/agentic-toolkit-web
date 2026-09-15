@@ -1,5 +1,4 @@
 import { render, screen } from '@testing-library/react';
-import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,18 +8,16 @@ import { SignInRoute } from '@/routes/SignIn';
 
 import { makeSessionValue, SessionHarness } from '../utils/session-harness';
 
+/** The router carries the query (as HashRouter does inside the fragment); `window.location.search` stays empty. */
 function renderSignIn(path: string, session: SessionContextValue) {
-  const search = path.includes('?') ? path.slice(path.indexOf('?')) : '';
   return render(
     <SessionHarness session={session}>
       <MemoryRouter initialEntries={[path]}>
-        <NuqsTestingAdapter searchParams={search}>
-          <Routes>
-            <Route element={<SignInRoute />} path='/sign-in' />
-            <Route element={<div data-testid='home'>home</div>} path='/' />
-            <Route element={<div data-testid='not-authorized'>na</div>} path='/not-authorized' />
-          </Routes>
-        </NuqsTestingAdapter>
+        <Routes>
+          <Route element={<SignInRoute />} path='/sign-in' />
+          <Route element={<div data-testid='home'>home</div>} path='/' />
+          <Route element={<div data-testid='not-authorized'>na</div>} path='/not-authorized' />
+        </Routes>
       </MemoryRouter>
     </SessionHarness>,
   );

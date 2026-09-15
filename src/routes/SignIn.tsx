@@ -1,6 +1,5 @@
-import { useQueryState } from 'nuqs';
 import { useEffect } from 'react';
-import { Navigate } from 'react-router';
+import { Navigate, useSearchParams } from 'react-router';
 
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import { PageHeader } from '@/components/PageHeader';
@@ -12,11 +11,15 @@ import { consumePendingReturnPath, type SessionScheme } from '@/lib/session';
  * Alternate direct-entry sign-in route. Kicks off the redirect immediately:
  * Entra by default, GitHub with `?provider=github`. If the user is already
  * signed in and a member, forwards them home.
+ *
+ * The query is read through react-router (hash-aware): under `HashRouter` the
+ * params live inside the fragment (`#/sign-in?provider=github`), where nuqs's
+ * react-router adapter, which reads `window.location.search`, cannot see them.
  */
 export function SignInRoute() {
   const { signIn, status } = useSession();
-  const [providerParam] = useQueryState('provider');
-  const provider: SessionScheme = providerParam === 'github' ? 'github' : 'entra';
+  const [searchParams] = useSearchParams();
+  const provider: SessionScheme = searchParams.get('provider') === 'github' ? 'github' : 'entra';
   const providerLabel = provider === 'github' ? 'GitHub' : 'Microsoft';
 
   useEffect(() => {
