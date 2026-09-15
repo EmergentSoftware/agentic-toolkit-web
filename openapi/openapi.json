@@ -3,7 +3,7 @@
   "info": {
     "title": "ATK API",
     "version": "0.2.0",
-    "description": "The Agentic Tool Kit API: registry reads, publish, checkout and web sign-in for the ATK CLI and web app. Authenticate with `Authorization: Bearer <GitHub token>`; the caller must be an active member of the EmergentSoftware GitHub organisation."
+    "description": "The Agentic Tool Kit API: registry reads, publish, checkout and web sign-in for the ATK CLI and web app. Authenticate with `Authorization: Bearer <token>` using either a GitHub token (the caller must be an active member of the EmergentSoftware GitHub organisation) or a Microsoft Entra ID access token for the ATK API (the caller must be a member, not a guest, of the Emergent Software tenant). `GET /me` reports which scheme applied."
   },
   "servers": [
     {
@@ -125,7 +125,7 @@
     },
     "/me": {
       "get": {
-        "summary": "The authenticated caller as resolved by the API",
+        "summary": "The authenticated caller as resolved by the API. `github` principals carry `githubAuthSunset` while a GitHub sign-in cutoff is scheduled.",
         "tags": [
           "Auth"
         ],
@@ -141,7 +141,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid token",
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -151,7 +151,17 @@
             }
           },
           "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -190,7 +200,7 @@
             "description": "Not modified"
           },
           "401": {
-            "description": "Missing or invalid token",
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -200,7 +210,17 @@
             }
           },
           "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -281,6 +301,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -291,18 +331,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -383,6 +413,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -393,18 +443,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -485,6 +525,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -495,18 +555,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,6 +647,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -607,18 +677,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -713,6 +773,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -723,18 +803,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -798,6 +868,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -808,18 +898,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -883,6 +963,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -893,18 +993,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -924,7 +1014,7 @@
     },
     "/bundles/{name}/{version}/download": {
       "get": {
-        "summary": "Zip of the bundle: `bundle.json` at the root and each member under `{member}/…`. `format=skill` drops `bundle.json` and nests skill members as `{member}.skill`.",
+        "summary": "Zip of the bundle: `bundle.json` (plus the bundle's `README.md` when it has one) at the root and each member under `{member}/…`. `format=skill` drops `bundle.json` and `README.md` and nests skill members as `{member}.skill`.",
         "tags": [
           "Bundles"
         ],
@@ -982,6 +1072,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -992,18 +1102,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1094,6 +1194,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown asset, version, or file",
             "content": {
@@ -1104,18 +1224,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1170,6 +1280,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "409": {
             "description": "`version_not_bumped`, `version_exists`, or `branch_exists`",
             "content": {
@@ -1180,8 +1310,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
+          "500": {
+            "description": "Entra caller but the API's GitHub publish token is missing or rejected (`server_misconfigured`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1190,8 +1320,8 @@
               }
             }
           },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub unreachable (`github_unavailable`, `registry_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1211,7 +1341,7 @@
     },
     "/publish": {
       "post": {
-        "summary": "Validate, then create the branch, commit and pull request on the registry with the caller's own token so the PR is authored by them. Global targets get the default reviewers; org targets use `reviewers`.",
+        "summary": "Validate, then create the branch, commit and pull request on the registry. GitHub callers write with their own token so the PR is authored by them; Entra callers are written by the API's publish identity with the commit authored as them, and every PR body names the publisher. Global targets get the default reviewers; org targets use `reviewers`.",
         "tags": [
           "Publish"
         ],
@@ -1246,6 +1376,26 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "409": {
             "description": "`version_not_bumped`, `version_exists`, or `branch_exists`",
             "content": {
@@ -1256,8 +1406,8 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid token",
+          "500": {
+            "description": "Entra caller but the API's GitHub publish token is missing or rejected (`server_misconfigured`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1266,8 +1416,8 @@
               }
             }
           },
-          "403": {
-            "description": "Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)",
+          "502": {
+            "description": "GitHub unreachable (`github_unavailable`, `registry_unavailable`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1291,7 +1441,7 @@
       "githubToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A GitHub token (OAuth, `gh auth token`, or PAT) with `read:org`, and `repo` for publishing."
+        "description": "Either a GitHub token (OAuth, `gh auth token`, or PAT) with `read:org` (and `repo` for publishing), or a Microsoft Entra ID v2.0 access token for the ATK API carrying the `access_as_user` scope (`az account get-access-token --scope api://<apiClientId>/access_as_user`). While a GitHub sign-in cutoff is scheduled, responses to GitHub-authenticated requests carry `Sunset` and `Deprecation: true` headers; after it GitHub tokens get `401 github_auth_retired`."
       }
     },
     "schemas": {
@@ -1558,11 +1708,15 @@
         "type": "object",
         "properties": {
           "scheme": {
-            "description": "Auth scheme that validated the token (`github`)",
+            "description": "Auth scheme that validated the token: `github` or `entra`",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable user id: the GitHub numeric user id, or the Entra object id (`oid`)",
             "type": "string"
           },
           "login": {
-            "description": "GitHub login",
+            "description": "GitHub login, or the Entra user principal name (e.g. `jasonp@emergentsoftware.net`)",
             "type": "string"
           },
           "name": {
@@ -1572,16 +1726,33 @@
               "null"
             ]
           },
-          "avatarUrl": {
-            "description": "Avatar URL",
+          "email": {
+            "description": "Email: the GitHub public profile email (often absent), or the Entra `email` claim falling back to the UPN",
             "type": [
               "string",
               "null"
             ]
+          },
+          "avatarUrl": {
+            "description": "Avatar URL (GitHub only)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "githubAuthSunset": {
+            "description": "Only on `github` principals while a GitHub sign-in cutoff is scheduled: when GitHub sign-in to ATK ends (RFC 3339, UTC). Absent otherwise. The same responses carry `Sunset` and `Deprecation` headers.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "default": null
           }
         },
         "required": [
           "scheme",
+          "id",
           "login"
         ]
       },
