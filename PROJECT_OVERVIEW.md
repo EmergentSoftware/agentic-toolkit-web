@@ -46,7 +46,7 @@ Developers should continue to use the `atk` CLI. ATK Web deliberately does **not
   - Fields for name, description, README, type, tags.
   - On submit, opens a **pull request** against `agentic-toolkit-registry` (mirroring the CLI's `atk publish` flow) so the existing security review pipeline runs.
 - **Org support** — users can view assets scoped to their org or global assets.
-- **Auth via GitHub** (the ATK API validates the token, gates on EmergentSoftware org membership, and opens PRs with it so they are authored by the user).
+- **Auth via an Emergent (Microsoft Entra) account or GitHub** (the ATK API validates either token: Entra tokens for Emergent Software tenant members, GitHub tokens for EmergentSoftware org members; GitHub publishes open PRs with the user's token, Entra publishes use the API's publish identity with the commit authored as the user).
 
 ### Out of scope
 
@@ -79,7 +79,7 @@ Intentionally small and conventional. No server in this repo — this is a fully
 
 ### ATK API Integration
 - **`@hey-api/openapi-ts`** — generates a typed fetch client (`src/lib/api/`) from the API's vendored OpenAPI contract (`openapi/openapi.json`). `src/lib/api-client.ts` wraps it with the base URL (`VITE_ATK_API_URL`), bearer auth from the session token, retries, and error mapping.
-- Auth via a **GitHub OAuth App** (standard web flow), with the `code`-for-token exchange handled by the ATK API's `POST /auth/github/exchange` (see §7 Authentication).
+- Auth via **`@azure/msal-browser`** (Microsoft Entra, auth-code + PKCE with the v5 redirect bridge page `auth-redirect.html`) and, until the cutoff, a **GitHub OAuth App** (standard web flow, `code`-for-token exchange handled by the ATK API's `POST /auth/github/exchange`). See §7 Authentication.
 
 ### Tooling
 - **ESLint** + **Prettier** — match the conventions used in `agentic-toolkit`.
@@ -118,47 +118,44 @@ Assets and bundles may be org-scoped (`org` in the manifest; `@{org}/` in regist
 
 - **Static SPA.** Built with Vite, deployed to GitHub Pages via GitHub Actions.
 - **The ATK API as the backend.** Every registry read (`GET /registry`, manifests, READMEs, file listings), every download (server-built zips), and every publish goes through the shared API; the browser never talks to GitHub's REST API directly. The CLI uses the same endpoints, so both clients see identical behaviour.
-- **Token passthrough.** The API validates the user's GitHub token and EmergentSoftware membership on each request and opens publish PRs with that same token, so PR authorship and the review workflow are unchanged from the CLI. The API never persists user tokens.
-- **Tokens live in the browser.** Access tokens are held in `sessionStorage` and never persisted to any server we operate.
+- **Token passthrough.** The API validates the user's token on each request (an Entra access token against the Emergent Software tenant, or a GitHub token against EmergentSoftware membership) and never persists it. GitHub publishes open PRs with that same token, so PR authorship is unchanged from the CLI; Entra publishes are opened by the API's publish identity with the commit authored as the user and a "Published by" line in the PR body.
+- **Tokens live in the browser.** Access tokens are held in `sessionStorage` (MSAL's cache for Entra, one key for GitHub) and never persisted to any server we operate.
 - **Registry schema parity with the CLI.** The web app validates and renders manifests using the same Zod schemas defined in `agentic-toolkit/src/lib/schemas/`. A valid asset in the CLI is a valid asset in the web UI, and vice versa.
 - **No duplicate registry.** The web app reads the canonical `registry.json` published by the registry repo's CI — the same artifact the CLI consumes.
 
 ## 7. Authentication
 
-### Approach: GitHub OAuth App + ATK API token exchange
+Two providers, one session (`src/providers/SessionProvider.tsx`): the **Emergent account** (Microsoft Entra ID, primary) and **GitHub** (secondary, kept until the GitHub sign-in cutoff). Whichever the user picks, the result is a bearer token the ATK API validates on every call; the API picks the scheme from the token's shape, so the SPA never says which kind it is sending. The contract is `docs/design/Auth.md` in the monorepo.
 
-GitHub Pages is static-only, and GitHub's OAuth token-exchange endpoint does not support CORS from arbitrary browser origins. That rules out a pure-browser OAuth handshake. The ATK API holds the OAuth App's `client_secret` and performs the one `code`-for-token exchange at `POST /auth/github/exchange` (this replaced the repo's earlier standalone `auth-function`).
+### Emergent account (MSAL)
 
-### Components
+- `@azure/msal-browser` 5 behind the small `EntraClient` interface in `src/lib/entra.ts` (tests inject a fake; there is no `msal-react`). Constants in code: tenant `25ee13ae-…`, SPA client `ES ATK Web` (`07a23158-…`), scope `api://8da5aa72-…/access_as_user`. No `VITE_*` variables.
+- **Redirect flow with the v5 redirect bridge.** "Sign in with your Emergent account" calls `loginRedirect` with the current `#/route` as the start page. Microsoft returns to `auth-redirect.html` (a second Vite entry whose only script calls `broadcastResponseToMainFrame()`), which hands the response to MSAL and navigates back to the start page, so the hash router never sees `#code=…`. On that load `SessionProvider` awaits `initialize()` and `handleRedirectPromise()` before reporting any status other than `verifying`.
+- **Tokens.** The API client's auth callback asks MSAL for an access token on every request (`acquireTokenSilent`); MSAL serves it from its `sessionStorage` cache and refreshes it with the SPA refresh token. A failure that needs interaction ends the session with a "Your Emergent sign-in has expired" notice; the app never starts an interactive flow from inside a request.
+- **Sign-out** is `logoutRedirect` with the app root as the post-logout target: clears the cache, ends the Microsoft web session, lands on the signed-out landing.
 
-1. **GitHub OAuth App** registered under the EmergentSoftware org.
-   - Callback URL: the deployed GitHub Pages URL.
-   - Required scopes: `read:org` (to verify EmergentSoftware membership) and `repo` (to read the private registry, fork it, push to the user's fork, and open PRs).
-2. **ATK API** (`func-atk-prod` / `func-atk-dev`, .NET on Azure Functions; deployed from the monorepo).
-   - `POST /auth/github/exchange` accepts an OAuth `code`, calls `github.com/login/oauth/access_token` with the stored `client_secret`, and returns GitHub's token response verbatim.
-   - The client secret lives in Key Vault; CORS is restricted to the SPA origins.
-   - Two OAuth Apps: the **dev** app's id is configured on the dev API (used by `pnpm dev`), the **prod** app's id on the prod API (used by GitHub Pages).
-3. **SPA auth flow.**
-   - User clicks "Sign in with GitHub" → redirected to the OAuth App authorize screen.
-   - GitHub redirects back to the SPA with a `code`.
-   - SPA `POST`s the code to `{VITE_ATK_API_URL}/auth/github/exchange` → receives the access token.
-   - SPA stores the token in `sessionStorage` and sends it as `Authorization: Bearer …` on every ATK API call.
+### GitHub OAuth App (until the cutoff)
 
-### Org membership gate
+GitHub Pages is static-only, and GitHub's OAuth token-exchange endpoint does not support CORS from arbitrary browser origins, so the ATK API holds the OAuth App's `client_secret` and performs the one `code`-for-token exchange at `POST /auth/github/exchange` (this replaced the repo's earlier standalone `auth-function`). "Sign in with GitHub" (or `/sign-in?provider=github`) redirects to the OAuth App's authorize screen with scopes `read:org repo`; GitHub returns to `/#/auth/callback?code=…&state=…`; the SPA checks `state`, `POST`s the code to the API, and stores the token in `sessionStorage` under `atk:session:token`. Two OAuth Apps: the **dev** app's id is configured on the dev API (used by `pnpm dev`), the **prod** app's id on the prod API (used by GitHub Pages).
 
-Immediately after auth, the SPA calls the API's `GET /me`. The API validates the token and checks EmergentSoftware membership itself:
+### Membership gate
 
-- **`200`:** active member — proceeds into the app; the response supplies the login, name, and avatar for display.
-- **`403 not_org_member` / `org_membership_unverifiable`:** shown a friendly blocking screen explaining they must be a member of EmergentSoftware to use this tool, with contact guidance for being added (the unverifiable case logs SAML / OAuth-App-approval hints to the console).
-- **`401`:** the stored token is dead; the app returns to the signed-out landing.
+Immediately after sign-in the SPA calls the API's `GET /me`, which validates the token and enforces membership itself:
+
+- **`200`:** allowed in. The response is the principal (`scheme`, `id`, `login`, `name?`, `email?`, `avatarUrl?`, `githubAuthSunset?`); the header shows `login` (the UPN for Entra users, the GitHub login otherwise).
+- **`403 not_org_member` / `org_membership_unverifiable`** (GitHub) or **`403 guest_not_allowed`** (Entra): the blocking "Not authorized" page, with copy per scheme (the unverifiable case logs SAML / OAuth-App-approval hints to the console).
+- **`401`:** the token is dead; the app returns to the signed-out landing. `401 github_auth_retired` (after the cutoff) keeps the API's message as a notice on the landing.
+
+### GitHub sign-in cutoff
+
+While the API has a cutoff scheduled, `githubAuthSunset` on the principal renders a banner under the header for GitHub sessions ("GitHub sign-in to ATK ends on YYYY-MM-DD. Switch to your Emergent account before then." with a **Switch now** button; dismissible per tab). Entra sessions never see it.
 
 ### End-user prerequisites
 
-To use ATK Web, a non-technical user needs:
+To use ATK Web, a non-technical user needs one of:
 
-1. A **GitHub account** (free signup at github.com).
-2. **Membership in the `EmergentSoftware` GitHub organization** — granted by an org admin; one-time.
-3. On first visit, **authorize the ATK Web OAuth App** via the standard GitHub consent screen — one click.
+1. An **Emergent Software Microsoft account** (tenant member; guests are refused). No consent screen: the app is pre-authorized on the API scope.
+2. A **GitHub account** that is an active member of the **`EmergentSoftware`** organization, plus one-time authorization of the ATK Web OAuth App on GitHub's consent screen (until the cutoff).
 
 No PATs, no CLI, no terminal, no git knowledge required.
 
@@ -179,17 +176,19 @@ agentic-toolkit-web/
 │   ├── routes/                 # page components (browse, detail, contribute, bundles)
 │   ├── lib/
 │   │   ├── api/                # GENERATED typed client + types (do not edit)
-│   │   ├── api-client.ts       # base URL, bearer auth, retries, error mapping
-│   │   ├── session.ts          # OAuth redirect + code exchange helpers
+│   │   ├── api-client.ts       # base URL, bearer auth (GitHub token or Entra token getter), retries, error mapping
+│   │   ├── entra.ts            # MSAL (Entra) client behind the EntraClient interface, plus a fake for tests
+│   │   ├── session.ts          # session types, GitHub OAuth redirect + code exchange helpers
 │   │   ├── registry-client.ts  # registry index, manifests, READMEs, file listings
 │   │   ├── download-service.ts # server-built zip / .skill downloads
 │   │   ├── publish-service.ts  # POST /publish and /publish/plan payloads
 │   │   └── schemas/            # Zod schemas (vendored from agentic-toolkit-cli)
 │   ├── hooks/                  # TanStack Query hooks (useRegistry, useAssetFiles, …)
-│   ├── providers/              # SessionProvider (token, GET /me, status machine)
+│   ├── providers/              # SessionProvider (Entra + GitHub, GET /me, status machine)
 │   └── main.tsx
 ├── public/
 ├── .github/workflows/          # validate PRs; build + deploy Pages on main
+├── auth-redirect.html          # MSAL redirect bridge page (second Vite entry; Entra returns here)
 ├── vite.config.ts
 ├── tsconfig.json
 ├── eslint.config.js
