@@ -130,6 +130,7 @@ export function createEntraClient(): EntraClient {
     },
     async handleRedirect() {
       const result = await pca.handleRedirectPromise();
+      scrubRedirectState();
       if (!result?.account) return null;
       pca.setActiveAccount(result.account);
       return toEntraAccount(result.account);
@@ -220,6 +221,19 @@ export function isSessionExpiredError(error: unknown): boolean {
 /** The redirect bridge page, `<app root>auth-redirect.html`. A registered redirect URI. */
 export function redirectBridgeUrl(): string {
   return `${appRootUrl()}auth-redirect.html`;
+}
+
+/**
+ * Drop the `?state=…` MSAL appends to the post-logout redirect (the app root)
+ * so the landing URL is clean. Keeps every other query parameter and the hash.
+ */
+export function scrubRedirectState(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('state')) return;
+  params.delete('state');
+  const query = params.toString();
+  const url = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+  window.history.replaceState(window.history.state, '', url);
 }
 
 function toEntraAccount(account: AccountInfo): EntraAccount {

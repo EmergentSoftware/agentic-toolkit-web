@@ -6,7 +6,7 @@ import {
   InteractionRequiredAuthError,
   ServerError,
 } from '@azure/msal-browser';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   appRootUrl,
@@ -18,6 +18,7 @@ import {
   ENTRA_TENANT_ID,
   isSessionExpiredError,
   redirectBridgeUrl,
+  scrubRedirectState,
 } from '@/lib/entra';
 
 describe('entra constants', () => {
@@ -32,6 +33,24 @@ describe('entra constants', () => {
     // vitest serves BASE_URL as '/'; the build uses '/agentic-toolkit-web/'.
     expect(appRootUrl()).toBe(`${window.location.origin}/`);
     expect(redirectBridgeUrl()).toBe(`${window.location.origin}/auth-redirect.html`);
+  });
+});
+
+describe('scrubRedirectState', () => {
+  afterEach(() => window.history.replaceState({}, '', '/'));
+
+  it('removes the state MSAL appends to the post-logout URL and keeps the rest', () => {
+    window.history.replaceState({}, '', '/agentic-toolkit-web/?state=abc&keep=1#/bundles');
+    scrubRedirectState();
+    expect(window.location.pathname).toBe('/agentic-toolkit-web/');
+    expect(window.location.search).toBe('?keep=1');
+    expect(window.location.hash).toBe('#/bundles');
+  });
+
+  it('leaves a URL without state untouched', () => {
+    window.history.replaceState({}, '', '/agentic-toolkit-web/#/');
+    scrubRedirectState();
+    expect(window.location.href).toBe(`${window.location.origin}/agentic-toolkit-web/#/`);
   });
 });
 
