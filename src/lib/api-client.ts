@@ -3,8 +3,8 @@
  *
  * Owns three concerns the generated code does not:
  * - Base URL resolution from `VITE_ATK_API_URL`.
- * - Wiring: bearer auth from the session token and retries through
- *   {@link fetchWithRetry}.
+ * - Wiring: bearer auth from the session credential (a GitHub token, or an
+ *   Entra token getter) and retries through {@link fetchWithRetry}.
  * - Error mapping: every non-2xx result becomes an {@link ApiRequestError}
  *   with a stable `code`, an HTTP `status`, and a message the UI can show.
  *
@@ -22,6 +22,19 @@ export type { ApiErrorDetail } from './api/types.gen';
 
 /** A configured ATK API client: base URL, bearer auth, and retries wired in. */
 export type ApiClient = Client;
+
+/**
+ * What {@link createApiClient} sends as the bearer token.
+ *
+ * `null` is the one unauthenticated call (the GitHub code exchange). A GitHub
+ * credential is the stored token itself. An Entra credential is a getter,
+ * because MSAL serves the access token from its cache and refreshes it when
+ * it nears expiry; the getter runs on every request.
+ */
+export type ApiCredential =
+  | null
+  | { getToken: () => Promise<string>; scheme: 'entra' }
+  | { scheme: 'github'; token: string };
 
 /** Shape of a generated SDK call result with `throwOnError: false` and `responseStyle: 'fields'`. */
 export interface ApiResult<T> {
@@ -70,20 +83,31 @@ export class ApiRequestError extends Error {
   }
 }
 
-/** Codes the API uses for a 403 that means "signed in, but not an org member". */
-export const NOT_MEMBER_CODES = new Set(['not_org_member', 'org_membership_unverifiable']);
+/**
+ * Codes the API uses for a 403 that means "signed in, but not allowed in":
+ * a GitHub account outside the EmergentSoftware org (or unverifiable), or an
+ * Entra guest account.
+ */
+export const NOT_MEMBER_CODES = new Set(['guest_not_allowed', 'not_org_member', 'org_membership_unverifiable']);
+
+/** Code of the synthetic 401 thrown when the Entra session can no longer be renewed silently. */
+export const SESSION_EXPIRED_CODE = 'session_expired';
 
 /**
- * Build an ATK API client for a session token.
+ * Build an ATK API client for a session credential.
  *
- * `token` may be `null` for the one unauthenticated call (the OAuth code
- * exchange); the bearer header is simply omitted. Every request is routed
+ * With `null` the bearer header is simply omitted. Every request is routed
  * through {@link fetchWithRetry}, so 429/5xx responses and network errors are
- * retried with backoff before the caller sees them.
+ * retried with backoff before the caller sees them. A rejected Entra token
+ * getter surfaces as the result's `error` with no `response`; {@link unwrap}
+ * rethrows it unchanged, so callers see the 401 it carries.
  */
-export function createApiClient(token: null | string, options: CreateApiClientOptions = {}): ApiClient {
+export function createApiClient(credential: ApiCredential, options: CreateApiClientOptions = {}): ApiClient {
   return createClient({
-    auth: () => token ?? undefined,
+    auth: async () => {
+      if (!credential) return undefined;
+      return credential.scheme === 'github' ? credential.token : credential.getToken();
+    },
     baseUrl: getApiUrl(),
     fetch: (input: Request | string | URL, init?: RequestInit) => fetchWithRetry(input, init, options.retry),
     throwOnError: false,
@@ -110,6 +134,15 @@ export function isApiError(err: unknown, code?: string, status?: number): err is
   return true;
 }
 
+/** The error an Entra credential throws once the session is over; a 401 to every caller. */
+export function sessionExpiredError(): ApiRequestError {
+  return new ApiRequestError('Your Emergent sign-in has expired. Sign in again.', {
+    code: SESSION_EXPIRED_CODE,
+    resource: 'your session',
+    status: 401,
+  });
+}
+
 /**
  * Convert a generated-client result into its `data`, or throw an
  * {@link ApiRequestError} describing why the call failed.
@@ -119,6 +152,9 @@ export function isApiError(err: unknown, code?: string, status?: number): err is
  */
 export function unwrap<T>(result: ApiResult<T>, resource: string): T {
   const { data, error, response } = result;
+
+  // Already mapped before the request was sent (an expired Entra session).
+  if (error instanceof ApiRequestError) throw error;
 
   if (response === undefined) {
     // The fetch itself threw (offline, DNS, CORS, abort, ...).
@@ -163,12 +199,14 @@ function toApiRequestError(status: number, error: unknown, resource: string): Ap
   const make = (message: string) => new ApiRequestError(message, { code, details, resource, status });
 
   if (status === 401) {
-    return make('Your GitHub session is no longer valid. Sign in again.');
+    // GitHub sign-in has ended: the API's message says when and what to do instead. Show it as-is.
+    if (code === 'github_auth_retired' && apiMessage) return make(apiMessage);
+    return make('Your session is no longer valid. Sign in again.');
   }
 
   if (status === 403 && NOT_MEMBER_CODES.has(code)) {
     return make(
-      'Your GitHub account is not an active member of the EmergentSoftware organization, or membership could not be verified.',
+      'Your account is not allowed to use ATK: GitHub accounts must be active members of the EmergentSoftware organization (or membership could not be verified), and Emergent accounts must be members of the Emergent Software tenant, not guests.',
     );
   }
 

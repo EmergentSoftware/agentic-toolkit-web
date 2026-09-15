@@ -179,11 +179,15 @@ export type OAuthTokenResponse = {
  */
 export type Principal = {
     /**
-     * Auth scheme that validated the token (`github`)
+     * Auth scheme that validated the token: `github` or `entra`
      */
     scheme: string;
     /**
-     * GitHub login
+     * Stable user id: the GitHub numeric user id, or the Entra object id (`oid`)
+     */
+    id: string;
+    /**
+     * GitHub login, or the Entra user principal name (e.g. `jasonp@emergentsoftware.net`)
      */
     login: string;
     /**
@@ -191,9 +195,17 @@ export type Principal = {
      */
     name?: string | null;
     /**
-     * Avatar URL
+     * Email: the GitHub public profile email (often absent), or the Entra `email` claim falling back to the UPN
+     */
+    email?: string | null;
+    /**
+     * Avatar URL (GitHub only)
      */
     avatarUrl?: string | null;
+    /**
+     * Only on `github` principals while a GitHub sign-in cutoff is scheduled: when GitHub sign-in to ATK ends (RFC 3339, UTC). Absent otherwise. The same responses carry `Sunset` and `Deprecation` headers.
+     */
+    githubAuthSunset?: string | null;
 };
 
 /**
@@ -422,13 +434,17 @@ export type MeData = {
 
 export type MeErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type MeError = MeErrors[keyof MeErrors];
@@ -451,13 +467,17 @@ export type GetRegistryData = {
 
 export type GetRegistryErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetRegistryError = GetRegistryErrors[keyof GetRegistryErrors];
@@ -500,17 +520,21 @@ export type GetAssetManifestData = {
 
 export type GetAssetManifestErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetAssetManifestError = GetAssetManifestErrors[keyof GetAssetManifestErrors];
@@ -553,17 +577,21 @@ export type GetAssetReadmeData = {
 
 export type GetAssetReadmeErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetAssetReadmeError = GetAssetReadmeErrors[keyof GetAssetReadmeErrors];
@@ -604,17 +632,21 @@ export type ListAssetFilesData = {
 
 export type ListAssetFilesErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type ListAssetFilesError = ListAssetFilesErrors[keyof ListAssetFilesErrors];
@@ -659,17 +691,21 @@ export type GetAssetFileData = {
 
 export type GetAssetFileErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetAssetFileError = GetAssetFileErrors[keyof GetAssetFileErrors];
@@ -714,17 +750,21 @@ export type DownloadAssetData = {
 
 export type DownloadAssetErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type DownloadAssetError = DownloadAssetErrors[keyof DownloadAssetErrors];
@@ -761,17 +801,21 @@ export type GetBundleManifestData = {
 
 export type GetBundleManifestErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetBundleManifestError = GetBundleManifestErrors[keyof GetBundleManifestErrors];
@@ -810,17 +854,21 @@ export type GetBundleReadmeData = {
 
 export type GetBundleReadmeErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type GetBundleReadmeError = GetBundleReadmeErrors[keyof GetBundleReadmeErrors];
@@ -861,17 +909,21 @@ export type DownloadBundleData = {
 
 export type DownloadBundleErrors = {
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type DownloadBundleError = DownloadBundleErrors[keyof DownloadBundleErrors];
@@ -916,17 +968,21 @@ export type CheckoutErrors = {
      */
     400: ApiError;
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * Unknown asset, version, or file
      */
     404: ApiError;
+    /**
+     * GitHub or Entra could not be reached to validate the token (`github_unavailable`, `entra_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type CheckoutError = CheckoutErrors[keyof CheckoutErrors];
@@ -953,17 +1009,25 @@ export type PublishPlanErrors = {
      */
     400: ApiError;
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * `version_not_bumped`, `version_exists`, or `branch_exists`
      */
     409: ApiError;
+    /**
+     * Entra caller but the API's GitHub publish token is missing or rejected (`server_misconfigured`)
+     */
+    500: ApiError;
+    /**
+     * GitHub unreachable (`github_unavailable`, `registry_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type PublishPlanError = PublishPlanErrors[keyof PublishPlanErrors];
@@ -990,17 +1054,25 @@ export type PublishErrors = {
      */
     400: ApiError;
     /**
-     * Missing or invalid token
+     * Missing or invalid token (`unauthenticated`, `unsupported_token`, `invalid_token`), or GitHub sign-in has ended (`github_auth_retired`)
      */
     401: ApiError;
     /**
-     * Not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`)
+     * GitHub: not an active EmergentSoftware member, or membership unverifiable (`not_org_member`, `org_membership_unverifiable`). Entra: a guest account (`guest_not_allowed`)
      */
     403: ApiError;
     /**
      * `version_not_bumped`, `version_exists`, or `branch_exists`
      */
     409: ApiError;
+    /**
+     * Entra caller but the API's GitHub publish token is missing or rejected (`server_misconfigured`)
+     */
+    500: ApiError;
+    /**
+     * GitHub unreachable (`github_unavailable`, `registry_unavailable`)
+     */
+    502: ApiError;
 };
 
 export type PublishError = PublishErrors[keyof PublishErrors];

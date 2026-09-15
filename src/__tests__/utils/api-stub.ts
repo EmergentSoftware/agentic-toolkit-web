@@ -41,7 +41,7 @@ export function jsonResponse(body: unknown, status = 200): Response {
 
 /** Build a real API client (bearer auth + retries) pointed at the test base URL. */
 export function makeTestApiClient(token: null | string = 'test-token', retry = fastRetry): ApiClient {
-  return createApiClient(token, { retry });
+  return createApiClient(token === null ? null : { scheme: 'github', token }, { retry });
 }
 
 /**

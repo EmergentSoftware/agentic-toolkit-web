@@ -1,4 +1,10 @@
-/** Constants, types, and helpers for the GitHub OAuth session layer. */
+/**
+ * Constants, types, and helpers for the session layer: the shared types for
+ * both sign-in providers, plus the GitHub OAuth helpers. The Entra side lives
+ * in `entra.ts`.
+ */
+
+import type { Principal } from './api/types.gen';
 
 import { authGitHubExchange } from './api';
 import { ApiRequestError, createApiClient, unwrap } from './api-client';
@@ -6,6 +12,7 @@ import { ApiRequestError, createApiClient, unwrap } from './api-client';
 export const SESSION_STORAGE_KEYS = {
   oauthState: 'atk:session:oauth-state',
   pendingReturn: 'atk:session:pending-return',
+  sunsetDismissed: 'atk:session:sunset-dismissed',
   token: 'atk:session:token',
 } as const;
 
@@ -18,8 +25,27 @@ export interface OAuthStateRecord {
   state: string;
 }
 
+/** A notice the signed-out landing shows above the sign-in buttons. */
+export interface SessionNotice {
+  kind: SessionNoticeKind;
+  message: string;
+}
+
+/**
+ * - `entra_expired`: the Entra session could not be renewed silently.
+ * - `github_auth_retired`: the API refused the GitHub token because GitHub sign-in has ended (the API's message, verbatim).
+ * - `sign_in_failed`: the Entra redirect came back with an error (cancelled, misconfigured, network).
+ */
+export type SessionNoticeKind = 'entra_expired' | 'github_auth_retired' | 'sign_in_failed';
+
+/** Which provider the current session came from. */
+export type SessionScheme = 'entra' | 'github';
+
 /** Session status machine. */
 export type SessionStatus = 'authenticating' | 'member' | 'non-member' | 'signed-out' | 'verifying';
+
+/** The signed-in user: the `GET /me` principal. `login` is the GitHub login or the Entra UPN. */
+export type SessionUser = Principal;
 
 /** Build the GitHub authorize URL for an OAuth redirect. */
 export function buildAuthorizeUrl(params: {
@@ -34,6 +60,11 @@ export function buildAuthorizeUrl(params: {
   url.searchParams.set('scope', params.scopes);
   url.searchParams.set('state', params.state);
   return url.toString();
+}
+
+/** Forget a GitHub authorize redirect that never came back. */
+export function clearOAuthState(): void {
+  window.sessionStorage.removeItem(SESSION_STORAGE_KEYS.oauthState);
 }
 
 /** Clear the access token from sessionStorage. */
@@ -69,6 +100,16 @@ export function consumePendingReturnPath(): string | undefined {
   const value = window.sessionStorage.getItem(SESSION_STORAGE_KEYS.pendingReturn);
   if (value) window.sessionStorage.removeItem(SESSION_STORAGE_KEYS.pendingReturn);
   return value ?? undefined;
+}
+
+/**
+ * The manifest `author` pre-fill for a signed-in user: the display name for
+ * an Entra user (falling back to the UPN), the login for a GitHub user.
+ */
+export function defaultAuthorFor(scheme: null | SessionScheme, user: null | SessionUser): string {
+  if (!user) return '';
+  if (scheme === 'entra') return user.name || user.login;
+  return user.login;
 }
 
 /**
@@ -117,6 +158,12 @@ export function fingerprintToken(token: string): string {
   // Short fingerprint: first/last chars + length. Not a hash; only used to
   // invalidate cached user queries when the token changes, never logged.
   return `${token.slice(0, 4)}:${token.slice(-4)}:${token.length}`;
+}
+
+/** The calendar date (UTC, `YYYY-MM-DD`) of an RFC 3339 timestamp such as `githubAuthSunset`. */
+export function formatSunsetDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? timestamp : date.toISOString().slice(0, 10);
 }
 
 /** Generate a cryptographically random state value (32 bytes → 64 hex chars). */

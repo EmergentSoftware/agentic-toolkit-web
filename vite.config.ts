@@ -6,6 +6,15 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   base: '/agentic-toolkit-web/',
+  build: {
+    rollupOptions: {
+      // Two entries: the SPA and the MSAL redirect bridge page (served at <base>auth-redirect.html).
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        redirect: path.resolve(import.meta.dirname, 'auth-redirect.html'),
+      },
+    },
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

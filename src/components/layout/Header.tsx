@@ -80,7 +80,7 @@ export function Header() {
             <Button
               aria-label='Sign in'
               data-testid='user-affordance'
-              onClick={() => signIn(consumePendingReturnPath())}
+              onClick={() => signIn('entra', consumePendingReturnPath())}
               size='sm'
               variant='outline'
             >

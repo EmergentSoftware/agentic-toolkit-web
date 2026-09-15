@@ -1,8 +1,10 @@
 import { render, screen } from '@testing-library/react';
+import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { App } from '@/App';
+import { createFakeEntraClient } from '@/lib/entra';
 
 /**
  * Routing smoke tests. Auth-protected routes redirect unauthenticated users
@@ -31,24 +33,28 @@ describe('route navigation (signed-out)', () => {
   beforeEach(() => window.sessionStorage.clear());
   afterEach(() => window.sessionStorage.clear());
 
-  it.each(SIGNED_OUT_CASES)('renders $path with its PageHeader title', ({ heading, path }) => {
+  it.each(SIGNED_OUT_CASES)('renders $path with its PageHeader title', async ({ heading, path }) => {
     render(
       <MemoryRouter initialEntries={[path]}>
-        <App />
+        <NuqsTestingAdapter>
+          <App entraClient={createFakeEntraClient()} />
+        </NuqsTestingAdapter>
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
   });
 
-  it.each(REDIRECTED_CASES)('redirects $path to the landing when signed out', ({ heading, path }) => {
+  it.each(REDIRECTED_CASES)('redirects $path to the landing when signed out', async ({ heading, path }) => {
     render(
       <MemoryRouter initialEntries={[path]}>
-        <App />
+        <NuqsTestingAdapter>
+          <App entraClient={createFakeEntraClient()} />
+        </NuqsTestingAdapter>
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
   });
 });

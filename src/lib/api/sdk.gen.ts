@@ -41,7 +41,7 @@ export const authGitHubExchange = <ThrowOnError extends boolean = false>(options
 });
 
 /**
- * The authenticated caller as resolved by the API
+ * The authenticated caller as resolved by the API. `github` principals carry `githubAuthSunset` while a GitHub sign-in cutoff is scheduled.
  */
 export const me = <ThrowOnError extends boolean = false>(options?: Options<MeData, ThrowOnError>): RequestResult<MeResponses, MeErrors, ThrowOnError> => (options?.client ?? client).get<MeResponses, MeErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -122,7 +122,7 @@ export const getBundleReadme = <ThrowOnError extends boolean = false>(options: O
 });
 
 /**
- * Zip of the bundle: `bundle.json` at the root and each member under `{member}/…`. `format=skill` drops `bundle.json` and nests skill members as `{member}.skill`.
+ * Zip of the bundle: `bundle.json` (plus the bundle's `README.md` when it has one) at the root and each member under `{member}/…`. `format=skill` drops `bundle.json` and `README.md` and nests skill members as `{member}.skill`.
  */
 export const downloadBundle = <ThrowOnError extends boolean = false>(options: Options<DownloadBundleData, ThrowOnError>): RequestResult<DownloadBundleResponses, DownloadBundleErrors, ThrowOnError> => (options.client ?? client).get<DownloadBundleResponses, DownloadBundleErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -153,7 +153,7 @@ export const publishPlan = <ThrowOnError extends boolean = false>(options: Optio
 });
 
 /**
- * Validate, then create the branch, commit and pull request on the registry with the caller's own token so the PR is authored by them. Global targets get the default reviewers; org targets use `reviewers`.
+ * Validate, then create the branch, commit and pull request on the registry. GitHub callers write with their own token so the PR is authored by them; Entra callers are written by the API's publish identity with the commit authored as them, and every PR body names the publisher. Global targets get the default reviewers; org targets use `reviewers`.
  */
 export const publish = <ThrowOnError extends boolean = false>(options: Options<PublishData, ThrowOnError>): RequestResult<PublishResponses, PublishErrors, ThrowOnError> => (options.client ?? client).post<PublishResponses, PublishErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

@@ -34,7 +34,7 @@ function renderCreateBundle(api: ApiClient | null = makeTestApiClient()) {
   const session = makeSessionValue({
     api,
     status: 'member',
-    user: { login: 'test-user', name: null },
+    user: { id: '1', login: 'test-user', name: null, scheme: 'github' },
   });
   return render(
     <MemoryRouter initialEntries={['/bundles/new']}>
@@ -225,7 +225,7 @@ describe('CreateBundle — wizard flow', () => {
     const session = makeSessionValue({
       api: makeTestApiClient(),
       status: 'member',
-      user: { login: 'test-user', name: null },
+      user: { id: '1', login: 'test-user', name: null, scheme: 'github' },
     });
     render(
       <MemoryRouter

@@ -27,6 +27,7 @@ import { findExistingBundle } from '@/lib/registry-client';
 import { type Bundle, BundleSchema } from '@/lib/schemas/bundle';
 import { AssetType } from '@/lib/schemas/manifest';
 import { type Registry, type RegistryAsset } from '@/lib/schemas/registry';
+import { defaultAuthorFor } from '@/lib/session';
 import { type BumpType, bumpVersion } from '@/lib/version-utils';
 
 export const DRAFT_STORAGE_KEY = 'atk:bundle:draft';
@@ -172,7 +173,7 @@ export function computeBundleVersionConflict(draft: BundleDraftState, registry: 
 
 export function CreateBundleRoute() {
   useWideLayout();
-  const { api, user } = useSession();
+  const { api, scheme, user } = useSession();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -180,7 +181,7 @@ export function CreateBundleRoute() {
   const registry = registryQuery.data ?? null;
 
   const seed = (location.state ?? null) as CreateBundleSeed | null;
-  const defaultAuthor = user?.login ?? '';
+  const defaultAuthor = defaultAuthorFor(scheme, user);
 
   const [draft, setDraft] = useState<BundleDraftState>(() => createInitialBundleDraft(defaultAuthor));
   const [submitting, setSubmitting] = useState(false);
@@ -729,7 +730,7 @@ function StepMetadata({ draft, onChange }: StepProps) {
               placeholder='GitHub login'
               value={draft.author}
             />
-            <p className='text-xs text-muted-foreground'>Pre-filled from your GitHub session; edit if needed.</p>
+            <p className='text-xs text-muted-foreground'>Pre-filled from your sign-in; edit if needed.</p>
           </div>
         </div>
         <div className='space-y-1.5'>

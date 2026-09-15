@@ -27,9 +27,9 @@ Related docs:
                                           POST /publish, /publish/plan            (open a registry PR)
 ```
 
-- The SPA runs entirely in the browser using `HashRouter`; no server-side routing is required.
-- The SPA calls `POST /auth/github/exchange` to swap a GitHub OAuth authorization code for an access token. The API holds the OAuth App's client secret (in Key Vault) and never exposes it to the browser.
-- Every other call carries `Authorization: Bearer <GitHub token>`. The API validates the token and EmergentSoftware org membership and, for publishing, opens the pull request **with that same token** so the PR is authored by the user.
+- The SPA runs entirely in the browser using `HashRouter`; no server-side routing is required. `auth-redirect.html` is a second static page: the MSAL redirect bridge that Microsoft Entra returns to after sign-in (see §2.4).
+- Two sign-in providers, one session. **Entra** (primary, "Sign in with your Emergent account"): MSAL runs the auth-code + PKCE flow against `login.microsoftonline.com` entirely in the browser; the API is not involved until the first call. **GitHub** (secondary, kept until the GitHub cutoff): the SPA calls `POST /auth/github/exchange` to swap an OAuth authorization code for an access token; the API holds the OAuth App's client secret (in Key Vault) and never exposes it to the browser.
+- Every other call carries `Authorization: Bearer <token>`. The API picks the scheme by the token's shape and validates it: Entra access tokens against the Emergent Software tenant (members only, guests refused), GitHub tokens against EmergentSoftware org membership. Publishing with a GitHub token opens the pull request **with that same token** so the PR is authored by the user; publishing with an Entra token uses the API's publish identity, with the commit authored as the user and a "Published by … via Entra" line in the PR body.
 - The API's OpenAPI contract is vendored at `openapi/openapi.json`; `src/lib/api/` is generated from it (`pnpm refresh-openapi && pnpm generate-api`).
 
 ---
@@ -66,6 +66,26 @@ On the `EmergentSoftware/agentic-toolkit-web` repo's **Settings → Secrets and 
 | `VITE_ATK_API_URL` | `https://func-atk-prod.azurewebsites.net` (base URL only: no `/api`, no trailing slash). |
 
 The names must match exactly what `deploy-pages.yml` reads and `src/lib/api-client.ts` / `src/lib/session.ts` expect. No repository secrets are required for the SPA deploy.
+
+### 2.4 Entra sign-in (nothing to configure per environment)
+
+The Emergent-account sign-in uses the `ES ATK Web` app registration in the Emergent Software tenant (client id `07a23158-19c4-4180-a2a9-41cb80882a65`, tenant `25ee13ae-a8a5-4bc2-bb23-aea90536fb0c`, scope `api://8da5aa72-0565-4ae8-bf5a-db89d8bd3186/access_as_user`). One registration serves dev and prod, so the values are constants in `src/lib/entra.ts`; there are no `VITE_*` variables, secrets, or per-environment settings for it. The registration is owned in the monorepo (`infra/README.md`); the web app needs these on it:
+
+| Setting | Value |
+|---|---|
+| Platform | Single-page application |
+| Redirect URIs (the MSAL redirect bridge, `auth-redirect.html`) | `http://localhost:5173/agentic-toolkit-web/auth-redirect.html`, `https://emergentsoftware.github.io/agentic-toolkit-web/auth-redirect.html` |
+| Redirect URIs (post-logout targets, the app root) | `http://localhost:5173/agentic-toolkit-web/`, `https://emergentsoftware.github.io/agentic-toolkit-web/` |
+| ID token optional claim | `login_hint` (lets sign-out skip Microsoft's account picker) |
+| API permissions | delegated `ATK API / access_as_user` (pre-authorized, no consent prompt) |
+
+Both URIs include the Vite `base` (`/agentic-toolkit-web/`) because `pnpm dev` serves the app under it too. The bridge page is built as a second Vite entry (`build.rollupOptions.input` in `vite.config.ts`), so it is emitted into `dist/` and published to Pages with the app; it must be served from the app's own origin. A mismatch shows on Microsoft's page as `AADSTS50011` (`redirect_uri_mismatch`).
+
+Entra tokens are held by MSAL in `sessionStorage` (per tab, like the GitHub token) and refreshed silently; when a silent refresh needs interaction the app signs out with a "Your Emergent sign-in has expired" notice. Sign-out ends the Microsoft web session too (`logoutRedirect`) and lands back on the app root.
+
+### 2.5 GitHub sign-in cutoff
+
+The API setting `Atk__Auth__GitHubSunset` (monorepo Terraform `github_auth_sunset`) schedules the end of GitHub sign-in. Before the date, the SPA shows a banner under the header to GitHub sessions ("GitHub sign-in to ATK ends on YYYY-MM-DD…", with a **Switch now** button that starts the Emergent sign-in); after it, GitHub sign-ins are refused with `401 github_auth_retired` and the landing shows the API's message. Entra sessions never see either. Nothing in this repo changes for the cutoff; it is set in the monorepo once the CLI and web both offer the Emergent sign-in.
 
 ---
 
@@ -131,10 +151,14 @@ An API-side incident (the exchange, `/me`, or registry reads failing) is handled
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| Emergent sign-in stops on a Microsoft page saying `AADSTS50011` / redirect URI mismatch | The `ES ATK Web` registration lacks the bridge URI for this origin. | Both `auth-redirect.html` URIs in §2.4 must be registered exactly, including `/agentic-toolkit-web/`. |
+| Landing shows "Sign-in did not complete (…)" after returning from Microsoft | The user cancelled, or Entra returned an error (`access_denied`, network). | The notice carries Entra's own description; sign in again. |
+| Landing shows "Your Emergent sign-in has expired" | A silent token refresh needed interaction (session revoked, 24h SPA refresh-token limit). | Sign in again. |
+| App shows "Not authorized" for an Emergent account | `GET /me` returned `403 guest_not_allowed`: the account is a guest in the tenant. | ATK is for tenant members; use an Emergent account or sign in with GitHub. |
 | Sign-in fails with a CORS error in the browser console | The API's `cors_allowed_origins` does not include the SPA origin. | Must contain `https://emergentsoftware.github.io` (prod) / `http://localhost:5173` (dev) — origin only, no path, no trailing slash. |
 | Sign-in fails with `Auth exchange failed (HTTP 400): bad_verification_code` | The `code` was already used or expired, or the SPA's client id does not match the API's. | Local dev must use the **dev** OAuth App id (the dev API's id); Pages must use the **prod** id. Start the sign-in over. |
 | Sign-in fails with `Auth exchange failed (HTTP 500)` | The API is missing its OAuth configuration. | Check `github_oauth_client_id` and the Key Vault secret for that environment. |
 | App shows "Not authorized" for a known org member | `GET /me` returned `403 org_membership_unverifiable`. | SAML SSO not authorized for the token, or the OAuth App is not approved for the org (`https://github.com/orgs/EmergentSoftware/policies/applications`). The browser console logs the hint. |
-| App drops back to the signed-out landing on load | `GET /me` returned `401`; the stored token is dead. | Sign in again. |
+| App drops back to the signed-out landing on load | `GET /me` returned `401`; the stored token is dead. | Sign in again. If the landing shows "GitHub sign-in to ATK ended on …", the cutoff has passed: use the Emergent account. |
 | `VITE_ATK_API_URL is not set` at startup | Repo variable or `.env.local` missing. | Variables must be named `VITE_GITHUB_OAUTH_CLIENT_ID` and `VITE_ATK_API_URL`. |
 | Downloads fail with "The ATK API is unavailable" | API 5xx (usually GitHub upstream). | Retry; check the API's App Insights in Azure. |

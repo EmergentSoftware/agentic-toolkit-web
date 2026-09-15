@@ -11,7 +11,8 @@ interface RequireAuthProps {
 
 /**
  * Route guard that allows the active session to reach `children` only when the
- * user is a verified member of the Emergent Software org. Unauthenticated users
+ * API has verified the user (an EmergentSoftware org member, or an Emergent
+ * Software tenant member). Unauthenticated users
  * are redirected to `/` (after stashing their intended path for restoration on
  * sign-in) and non-members are redirected to `/not-authorized`.
  */
@@ -35,7 +36,7 @@ export function RequireAuth({ children }: RequireAuthProps) {
         className='flex min-h-[60vh] items-center justify-center'
         data-testid='require-auth-loading'
       >
-        <LoadingIndicator label='Verifying your GitHub org membership…' />
+        <LoadingIndicator label='Checking your access…' />
       </div>
     );
   }
