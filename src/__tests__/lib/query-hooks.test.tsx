@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '@/lib/api-client';
 
 import { useAssetFiles } from '@/hooks/useAssetFiles';
+import { useAssetReadme } from '@/hooks/useAssetReadme';
 import { useBundleReadme } from '@/hooks/useBundleReadme';
 import { useRegistry } from '@/hooks/useRegistry';
 import { queryKeys } from '@/lib/query-keys';
@@ -148,6 +149,41 @@ describe('useAssetFiles (TanStack Query)', () => {
     expect(result.current.data?.files.map((f) => f.path)).toEqual(['AGENT.md', 'manifest.json']);
     expect(calls[0]!.url).toBe('http://localhost:7071/assets/agent/validate/1.1.0/files?org=agentic-toolkit');
     expect(client.getQueryData(queryKeys.assetFiles(ref))).toBeDefined();
+  });
+});
+
+describe('useAssetReadme (TanStack Query)', () => {
+  beforeEach(() => {
+    sessionValueMock.api = null;
+    sessionValueMock.token = null;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const ref = { name: 'bare-skill', type: 'skill' as const, version: '0.1.0' };
+
+  it('fetches the README markdown by default', async () => {
+    sessionValueMock.api = makeTestApiClient('tok');
+    const { calls } = stubFetch(() => textResponse('# Hi'));
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useAssetReadme(ref), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBe('# Hi');
+    expect(calls[0]!.url).toBe('http://localhost:7071/assets/skill/bare-skill/0.1.0/readme');
+  });
+
+  it('makes no request when disabled by the caller', async () => {
+    sessionValueMock.api = makeTestApiClient('tok');
+    const { calls } = stubFetch(() => textResponse('# Hi'));
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useAssetReadme(ref, { enabled: false }), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'));
+    expect(calls).toHaveLength(0);
   });
 });
 

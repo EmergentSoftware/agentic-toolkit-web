@@ -43,8 +43,11 @@ export function AssetDetailRoute() {
   const ref = { name, org, type: assetType, version };
 
   const manifestQuery = useAssetManifest(ref);
-  const readmeQuery = useAssetReadme(ref);
   const filesQuery = useAssetFiles(ref);
+  // Ask for the README only once the listing shows one: the API answers 404 otherwise, and those 404s
+  // count as failed requests in App Insights. If the listing fails, fall back to asking.
+  const readmeListed = filesQuery.data?.files.some((file) => file.path === 'README.md');
+  const readmeQuery = useAssetReadme(ref, { enabled: readmeListed ?? !filesQuery.isLoading });
   const registryQuery = useRegistry();
   const { download, isDownloading } = useDownloadAsset();
 
@@ -234,7 +237,7 @@ export function AssetDetailRoute() {
         ariaLabel='Asset README'
         emptyMessage='No README is available for this asset.'
         isError={readmeQuery.isError}
-        isLoading={readmeQuery.isLoading}
+        isLoading={filesQuery.isLoading || readmeQuery.isLoading}
         readme={readmeQuery.data}
         testId='asset-detail-readme'
       />
