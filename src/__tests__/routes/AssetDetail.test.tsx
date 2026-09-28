@@ -270,6 +270,45 @@ describe('AssetDetailRoute', () => {
     expect(screen.getByTestId('files-card-loading')).toBeInTheDocument();
   });
 
+  describe('README request gating', () => {
+    const listing = (paths: string[]): AssetFileList => ({
+      files: paths.map((path) => ({ path, sha: 'x', size: 1 })),
+      name: 'bare-skill',
+      type: 'skill',
+      version: '0.1.0',
+    });
+
+    beforeEach(() => {
+      setManifest({ data: MINIMAL_MANIFEST, isSuccess: true });
+      setReadme({ data: undefined, isSuccess: false });
+    });
+
+    it('requests the README when the listing includes README.md', () => {
+      setFiles({ data: listing(['SKILL.md', 'README.md']), isSuccess: true });
+      renderAt('/assets/skill/bare-skill/0.1.0');
+      expect(useAssetReadmeMock).toHaveBeenLastCalledWith(expect.anything(), { enabled: true });
+    });
+
+    it('skips the README request and shows the empty state when the listing has no README.md', () => {
+      setFiles({ data: listing(['SKILL.md', 'manifest.json']), isSuccess: true });
+      renderAt('/assets/skill/bare-skill/0.1.0');
+      expect(useAssetReadmeMock).toHaveBeenLastCalledWith(expect.anything(), { enabled: false });
+      expect(screen.getByText('No README is available for this asset.')).toBeInTheDocument();
+    });
+
+    it('waits for the listing before requesting the README', () => {
+      setFiles({ isLoading: true });
+      renderAt('/assets/skill/bare-skill/0.1.0');
+      expect(useAssetReadmeMock).toHaveBeenLastCalledWith(expect.anything(), { enabled: false });
+    });
+
+    it('falls back to requesting the README when the listing fails', () => {
+      setFiles({ error: new Error('boom'), isError: true });
+      renderAt('/assets/skill/bare-skill/0.1.0');
+      expect(useAssetReadmeMock).toHaveBeenLastCalledWith(expect.anything(), { enabled: true });
+    });
+  });
+
   it('renders every field of a fully populated manifest', () => {
     setManifest({ data: FULL_MANIFEST, isSuccess: true });
     setReadme({ data: '# Ready', isSuccess: true });

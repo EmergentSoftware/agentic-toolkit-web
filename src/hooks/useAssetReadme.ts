@@ -6,11 +6,16 @@ import { type AssetManifestRef, fetchAssetReadme } from '@/lib/registry-client';
 
 /**
  * Fetch and cache an asset's README.md. Requires an authenticated session.
- * Resolves to `null` when the README is missing (HTTP 404).
+ * Resolves to `null` when the README is missing (HTTP 404). Pass
+ * `enabled: false` to skip the request when the caller already knows there is
+ * no README.
  */
-export function useAssetReadme(ref: Partial<AssetManifestRef>): UseQueryResult<null | string, Error> {
+export function useAssetReadme(
+  ref: Partial<AssetManifestRef>,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<null | string, Error> {
   const { api } = useSession();
-  const enabled = Boolean(api && ref.name && ref.type && ref.version);
+  const enabled = Boolean(api && ref.name && ref.type && ref.version) && (options.enabled ?? true);
 
   return useQuery({
     enabled,
