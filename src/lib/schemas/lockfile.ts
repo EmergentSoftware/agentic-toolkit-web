@@ -59,7 +59,5 @@ export const LockfileSchema = z.object({
   assets: z.array(InstalledAsset).optional().describe('Currently installed assets'),
   lockVersion: z.literal(1).describe('Lock file format version'),
   org: z.string().optional().describe('Organization scope for this lockfile'),
-  registryBranch: z.string().optional().describe('Override registry branch for GitHub API calls'),
-  registryUrl: z.string().optional().describe('Override registry URL'),
 });
 export type Lockfile = z.infer<typeof LockfileSchema>;

@@ -8,8 +8,6 @@ export const ConfigSchema = z.object({
   checkUpdates: z.boolean().optional().describe('Show banner when a newer ATK version is available'),
   githubToken: z.string().optional().describe('GitHub token override (defaults to gh auth token)'),
   org: z.string().optional().describe('Default organization scope for asset resolution'),
-  registryBranch: z.string().optional().describe('Override registry branch for GitHub API calls (defaults to main)'),
-  registryUrl: z.string().optional().describe('Override registry URL (defaults to GitHub repo)'),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
