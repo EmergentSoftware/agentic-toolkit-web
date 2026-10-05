@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>ATK has moved</title>
+    <!-- The old sign-in bridge. Goes to the new app's root and never forwards `code` or `state`. -->
+    <script type="module">
+      import { NEW_ORIGIN } from './redirect.js';
+
+      window.location.replace(new URL('/', NEW_ORIGIN).href);
+    </script>
+  </head>
+  <body>
+    <p>
+      The Agentic Tool Kit web app has moved to
+      <a href="https://ashy-wave-0d3ec6210.3.azurestaticapps.net/">ashy-wave-0d3ec6210.3.azurestaticapps.net</a>.
+    </p>
+  </body>
+</html>
