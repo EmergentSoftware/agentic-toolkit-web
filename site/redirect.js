@@ -1,7 +1,7 @@
 // Maps the old app's hash routes to the new ATK web app's URLs.
 // Spec: docs/prompts/step-8b-web.md (Part 5) in the Emergent.AgenticToolkit monorepo.
 
-export const NEW_ORIGIN = 'https://ashy-wave-0d3ec6210.3.azurestaticapps.net';
+export const NEW_ORIGIN = 'https://atk.emergentsoftware.io';
 
 /**
  * The new app's root-relative URL for an old `location.hash`. Never throws.
